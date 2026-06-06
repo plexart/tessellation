@@ -68,6 +68,25 @@
   .switch input:checked + .slider { background:#3aa0ff; }
   .switch input:checked + .slider:before { transform:translateX(18px); }
 
+  /* ---------- Custom shape builder ---------- */
+  .field-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  .field-row > label { font-size:13px; font-weight:600; color:#344a5e; flex:0 0 auto; }
+  .field-row input[type=number] {
+    width:62px; padding:7px 9px; border:1px solid #d4deea; border-radius:8px;
+    font-size:13px; font-weight:600; color:#344a5e; text-align:center;
+  }
+  .field-row input[type=range] { flex:1; accent-color:#e6477e; cursor:pointer; }
+  .field-row .deg { font-size:13px; color:#7587a0; font-weight:600; }
+  .stepper { display:flex; align-items:center; gap:6px; margin-left:auto; }
+  .stepper button {
+    width:30px; height:30px; border:1px solid #d4deea; background:#fff; border-radius:8px;
+    font-size:17px; font-weight:700; color:#344a5e; cursor:pointer; line-height:1; padding:0;
+  }
+  .stepper button:hover { background:#f0f7ff; border-color:#9fc2e8; }
+  .stepper input { width:44px; height:30px; text-align:center; border:1px solid #d4deea;
+    border-radius:8px; font-size:14px; font-weight:700; color:#344a5e; }
+  .field-hint { font-size:12px; color:#7587a0; margin:0 2px 8px; }
+
   /* ---------- Canvas area ---------- */
   #stage { flex:1; position:relative; display:flex; flex-direction:column; min-width:0; }
   #banner {
@@ -115,7 +134,7 @@
       </div>
     </div>
 
-    <div class="section">
+    <div class="section" id="secRegular">
       <div class="section-title"><span class="dot" style="background:#34c759"></span>正多边形</div>
       <button class="tool" data-add="triangle"><span class="swatch" style="background:#cdeccf"></span>正三角形</button>
       <button class="tool" data-add="square"><span class="swatch" style="background:#cfe3f7"></span>正方形</button>
@@ -123,13 +142,48 @@
       <button class="tool" data-add="pentagon"><span class="swatch" style="background:#f3d2e0"></span>正五边形&nbsp;&#10060;</button>
     </div>
 
-    <div class="section">
+    <div class="section" id="secRandom">
       <div class="section-title"><span class="dot" style="background:#ff9500"></span>随机不规则图形</div>
       <button class="tool" data-add="randTriangle"><span class="swatch" style="background:#e6dcf7"></span>随机三角形</button>
       <button class="tool" data-add="randQuad"><span class="swatch" style="background:#dcf0f7"></span>随机四边形</button>
     </div>
 
-    <div class="section">
+    <div class="section" id="secCustom">
+      <div class="section-title"><span class="dot" style="background:#e6477e"></span>自定义图形</div>
+      <div class="field-row">
+        <label>边数</label>
+        <div class="stepper">
+          <button type="button" id="sidesDown">&minus;</button>
+          <input type="text" id="customSides" value="4" readonly />
+          <button type="button" id="sidesUp">+</button>
+        </div>
+      </div>
+      <div class="field-row">
+        <label>大小</label>
+        <input type="range" id="customSize" min="40" max="120" value="78" />
+      </div>
+      <div class="toggle-row">
+        <span class="switch-label">正多边形</span>
+        <label class="switch">
+          <input type="checkbox" id="customRegular" checked />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div id="triAngles" style="display:none">
+        <div class="field-row">
+          <label>角 A</label>
+          <input type="number" id="angA" min="10" max="160" value="60" /><span class="deg">°</span>
+        </div>
+        <div class="field-row">
+          <label>角 B</label>
+          <input type="number" id="angB" min="10" max="160" value="60" /><span class="deg">°</span>
+        </div>
+        <div class="field-hint" id="angCHint">角 C = 60°</div>
+      </div>
+      <button class="tool accent" id="btnCreateCustom">&#10010; 创建图形</button>
+    </div>
+
+    <div class="section" id="secActions" style="display:none">
       <div class="section-title"><span class="dot" style="background:#7c5cff"></span>操作</div>
       <button class="tool accent" id="btnDuplicate">&#128203; 复制<span class="key">Ctrl+D</span></button>
       <button class="tool accent" id="btnUndo">&#8630; 撤销<span class="key">Ctrl+Z</span></button>
@@ -322,7 +376,21 @@ resizeCanvas();
 function updateCounter() {
   var n = canvas.getObjects().filter(function(o){return !o.isGuide;}).length;
   document.getElementById("counter").textContent = "图形：" + n;
+  updateUI(n);
 }
+
+// Empty canvas → show the shape-creation tools (and hide the actions). Once a
+// shape exists → hide creation (no second, different base shape) and show the
+// actions instead. Clearing the canvas returns to the creation state.
+function updateUI(n) {
+  var creating = n === 0;
+  ["secRegular", "secRandom", "secCustom"].forEach(function (id) {
+    document.getElementById(id).style.display = creating ? "" : "none";
+  });
+  document.getElementById("secActions").style.display = creating ? "none" : "";
+}
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 /* ----------------------------- Shape factories ----------------------------- */
 function regularPolygonPoints(sides, radius, rotationDeg) {
@@ -414,6 +482,58 @@ function addShape(kind) {
     case "randTriangle": return addPolygon(randomConvex(3));
     case "randQuad":     return addPolygon(randomConvex(4));
   }
+}
+
+/* --------------------------- Custom shape builder -------------------------- */
+function customSidesValue() { return clamp(parseInt(document.getElementById("customSides").value, 10) || 4, 3, 12); }
+
+// Show the per-angle inputs only when building a custom (non-regular) triangle,
+// where two angles fully determine the shape.
+function refreshCustomFields() {
+  var sides = customSidesValue();
+  var regular = document.getElementById("customRegular").checked;
+  document.getElementById("triAngles").style.display = (!regular && sides === 3) ? "" : "none";
+  refreshAngleHint();
+}
+
+function refreshAngleHint() {
+  var a = parseFloat(document.getElementById("angA").value) || 0;
+  var b = parseFloat(document.getElementById("angB").value) || 0;
+  var c = 180 - a - b;
+  document.getElementById("angCHint").textContent =
+    c > 0 ? "角 C = " + Math.round(c) + "°" : "角 A + 角 B 要小于 180°";
+}
+
+// Triangle from two interior angles (A at origin, B at far end of the base,
+// C = 180−A−B) via the law of sines.
+function trianglePointsFromAngles(A, B, baseLen) {
+  var C = 180 - A - B;
+  var b = baseLen * Math.sin(RAD(B)) / Math.sin(RAD(C)); // length of side AC
+  return [
+    { x: 0, y: 0 },
+    { x: baseLen, y: 0 },
+    { x: b * Math.cos(RAD(A)), y: -b * Math.sin(RAD(A)) }
+  ];
+}
+
+function createCustomShape() {
+  var sides = customSidesValue();
+  var size = clamp(parseInt(document.getElementById("customSize").value, 10) || 78, 40, 120);
+  var regular = document.getElementById("customRegular").checked;
+  var pts;
+  if (regular) {
+    pts = regularPolygonPoints(sides, size, -90);
+  } else if (sides === 3) {
+    var A = clamp(parseFloat(document.getElementById("angA").value) || 60, 10, 165);
+    var B = clamp(parseFloat(document.getElementById("angB").value) || 60, 10, 165);
+    if (A + B >= 170) { flashBanner("角度无效：角 A + 角 B 要小于 170°，角 C 才能大于 0。"); return; }
+    pts = trianglePointsFromAngles(A, B, size);
+  } else {
+    var k = size / 80;
+    pts = randomConvex(sides).map(function (p) { return { x: p.x * k, y: p.y * k }; });
+  }
+  pushUndo();
+  addPolygon(pts);
 }
 
 /* ---------------------- World-coordinate geometry helpers ------------------ */
@@ -865,6 +985,21 @@ document.getElementById("btnTessDemo").addEventListener("click", tessellationDem
 document.getElementById("btnDelete").addEventListener("click", deleteSelected);
 document.getElementById("btnClear").addEventListener("click", clearCanvas);
 
+// custom shape builder
+document.getElementById("sidesUp").addEventListener("click", function () {
+  document.getElementById("customSides").value = clamp(customSidesValue() + 1, 3, 12);
+  refreshCustomFields();
+});
+document.getElementById("sidesDown").addEventListener("click", function () {
+  document.getElementById("customSides").value = clamp(customSidesValue() - 1, 3, 12);
+  refreshCustomFields();
+});
+document.getElementById("customRegular").addEventListener("change", refreshCustomFields);
+document.getElementById("angA").addEventListener("input", refreshAngleHint);
+document.getElementById("angB").addEventListener("input", refreshAngleHint);
+document.getElementById("btnCreateCustom").addEventListener("click", createCustomShape);
+refreshCustomFields();
+
 // keyboard shortcuts
 window.addEventListener("keydown", function (e) {
   var tag = (e.target && e.target.tagName) || "";
@@ -880,10 +1015,8 @@ window.addEventListener("keydown", function (e) {
 canvas.on("object:added", updateCounter);
 canvas.on("object:removed", updateCounter);
 
-// seed with a friendly starter shape (not recorded as an undo step)
-isRestoring = true;
-addPolygon(regularPolygonPoints(6, 72, -90), { fill: "#f7e6c9" });
-isRestoring = false;
+// start empty: only the shape-creation tools are shown until a shape exists
+updateCounter();
 </script>
 </body>
 </html>

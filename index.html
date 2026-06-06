@@ -249,6 +249,8 @@ fabric.ColoredPolygon = fabric.util.createClass(fabric.Polygon, {
   edgeColors: null,
   showAngles: false,
   edgeStrokeWidth: 1.5,
+  // render straight to the canvas (no cached bitmap) so edges + angle labels stay crisp
+  objectCaching: false,
 
   initialize: function (points, options) {
     options = options || {};
@@ -332,14 +334,14 @@ fabric.ColoredPolygon = fabric.util.createClass(fabric.Polygon, {
         var tx = cur.x + (dx/len)*off - ox;
         var ty = cur.y + (dy/len)*off - oy;
         var label = deg + "\u00B0";
-        var w = ctx.measureText(label).width;
-        ctx.fillStyle = "rgba(255,255,255,0.82)";
-        ctx.beginPath();
-        var rw = w/2 + 5, rh = 9;
-        if (ctx.roundRect) { ctx.roundRect(tx-rw, ty-rh, rw*2, rh*2, 6); }
-        else { ctx.rect(tx-rw, ty-rh, rw*2, rh*2); }
-        ctx.fill();
-        ctx.fillStyle = "#23485f";
+        tx = Math.round(tx); ty = Math.round(ty);
+        // thin white halo (glyph outline, not a background box) keeps dark text legible
+        ctx.lineJoin = "round";
+        ctx.miterLimit = 2;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.strokeText(label, tx, ty);
+        ctx.fillStyle = "#16334a";
         ctx.fillText(label, tx, ty);
       }
     }

@@ -134,7 +134,7 @@
       <button class="tool accent" id="btnDuplicate">&#128203; 复制<span class="key">Ctrl+D</span></button>
       <button class="tool accent" id="btnUndo">&#8630; 撤销<span class="key">Ctrl+Z</span></button>
       <button class="tool accent" id="btnGroup">&#128230; 组合 / 解组<span class="key">Ctrl+G</span></button>
-      <button class="tool accent" id="btnHexDemo">&#10024; 一键六边形演示</button>
+      <button class="tool accent" id="btnTessDemo">&#10024; 一键密铺演示（选中图形）</button>
       <button class="tool danger" id="btnDelete">&#128465; 删除选中<span class="key">Del</span></button>
       <button class="tool danger" id="btnClear">&#128260; 清空画布</button>
     </div>
@@ -705,37 +705,99 @@ function clearCanvas() {
   updateCounter();
 }
 
-/* -------------------------- One-click hexagon demo ------------------------- */
-function hexagonDemo() {
-  pushUndo();
-  var c = centerOfView();
-  var R = 78;
-  for (var i = 0; i < 6; i++) {
-    var a0 = RAD(-90 + i*60);
-    var a1 = RAD(-90 + (i+1)*60);
-    var p0 = { x: 0, y: 0 };
-    var p1 = { x: R*Math.cos(a0), y: R*Math.sin(a0) };
-    var p2 = { x: R*Math.cos(a1), y: R*Math.sin(a1) };
-    var gx = (p0.x+p1.x+p2.x)/3, gy = (p0.y+p1.y+p2.y)/3;
-    var pts = [
-      { x: p0.x-gx, y: p0.y-gy },
-      { x: p1.x-gx, y: p1.y-gy },
-      { x: p2.x-gx, y: p2.y-gy }
-    ];
-    var poly = new fabric.ColoredPolygon(pts, {
-      left: c.x + gx,
-      top: c.y + gy,
-      originX: "center",
-      originY: "center",
-      fill: FILL_COLORS[i % FILL_COLORS.length],
-      showAngles: anglesOn
-    });
-    canvas.add(poly);
+/* --------------- One-click tessellation demo (selected shape) -------------- */
+// Rotate point p by ang (radians) around pivot o.
+function rotateAround(p, o, ang) {
+  var c = Math.cos(ang), s = Math.sin(ang);
+  var dx = p.x - o.x, dy = p.y - o.y;
+  return { x: o.x + dx*c - dy*s, y: o.y + dx*s + dy*c };
+}
+
+// Build a ColoredPolygon from absolute world-space points (default top/left
+// origin so the literal coordinates place it correctly on the canvas).
+function addTileFromWorldPoints(worldPts, base, fillIndex) {
+  var poly = new fabric.ColoredPolygon(worldPts, {
+    fill: FILL_COLORS[fillIndex % FILL_COLORS.length],
+    edgeColors: base.edgeColors.slice(),
+    edgeStrokeWidth: base.edgeStrokeWidth,
+    showAngles: anglesOn
+  });
+  canvas.add(poly);
+  return poly;
+}
+
+// Tile triangles / quadrilaterals / hexagons by repeated 180° rotations about
+// shared-edge midpoints (a valid tiling for any triangle, any quadrilateral,
+// and centrally-symmetric polygons such as the regular hexagon).
+function halfTurnTiling(base, worldPts) {
+  var MAX_TILES = 12;
+  function centroidKey(pts) {
+    var cx = 0, cy = 0;
+    for (var i = 0; i < pts.length; i++) { cx += pts[i].x; cy += pts[i].y; }
+    cx /= pts.length; cy /= pts.length;
+    return Math.round(cx/2) + "_" + Math.round(cy/2);
   }
+  var placed = {};
+  placed[centroidKey(worldPts)] = true;
+  var queue = [worldPts];
+  var tiles = [];
+  while (queue.length && tiles.length < MAX_TILES) {
+    var t = queue.shift();
+    tiles.push(t);
+    for (var e = 0; e < t.length; e++) {
+      var a = t[e], b = t[(e+1) % t.length];
+      var mx = (a.x + b.x)/2, my = (a.y + b.y)/2;
+      var nb = t.map(function (p) { return { x: 2*mx - p.x, y: 2*my - p.y }; });
+      var k = centroidKey(nb);
+      if (!placed[k]) { placed[k] = true; queue.push(nb); }
+    }
+  }
+  // tiles[0] is the already-existing selected shape; render the rest.
+  for (var ti = 1; ti < tiles.length; ti++) addTileFromWorldPoints(tiles[ti], base, ti);
+  flashBanner("用选中的图形密铺：复制并旋转，让相同的边彼此贴合，铺满平面！");
+}
+
+// Fan copies of the selected shape around one vertex; for shapes whose interior
+// angle doesn't divide 360° (e.g. the regular pentagon) this leaves a visible
+// gap — showing why such shapes can't tessellate.
+function rosetteTiling(base, worldPts) {
+  var n = worldPts.length;
+  var prev = worldPts[n-1], cur = worldPts[0], nxt = worldPts[1];
+  var a1 = Math.atan2(prev.y - cur.y, prev.x - cur.x);
+  var a2 = Math.atan2(nxt.y - cur.y, nxt.x - cur.x);
+  var theta = Math.abs(normAngle(a1 - a2));        // interior angle (radians)
+  var sign = normAngle(a1 - a2) >= 0 ? 1 : -1;     // sweep direction
+  var fit = Math.floor((2*Math.PI + 1e-6) / theta);
+  for (var k = 1; k < fit; k++) {
+    var rot = worldPts.map(function (p) { return rotateAround(p, cur, sign * theta * k); });
+    addTileFromWorldPoints(rot, base, k);
+  }
+  var deg = Math.round(theta * 180 / Math.PI);
+  if (fit * theta < 2*Math.PI - 1e-3) {
+    flashBanner("内角约 " + deg + "°，绕一个顶点放 " + fit + " 个共 " + (fit*deg) +
+                "°，无法铺满 360° —— 所以它不能密铺！");
+  } else {
+    flashBanner(fit + " 个图形绕一个顶点正好拼成 360°，可以密铺！");
+  }
+}
+
+function tessellationDemo() {
+  var active = canvas.getActiveObject();
+  if (!active || active.type !== "coloredPolygon") {
+    flashBanner("请先选中单个图形，再点击「一键密铺演示」。");
+    return;
+  }
+  pushUndo();
+  var worldPts = [];
+  for (var i = 0; i < active.points.length; i++) worldPts.push(worldVertex(active, i));
+  // A regular polygon tessellates iff its interior angle divides 360° evenly
+  // (triangle, square, hexagon). Half-turn tiling covers those plus any
+  // triangle/quad; otherwise fall back to the rosette gap demo.
+  if (worldPts.length === 5) rosetteTiling(active, worldPts);
+  else halfTurnTiling(active, worldPts);
   canvas.discardActiveObject();
   canvas.requestRenderAll();
   updateCounter();
-  flashBanner("6 个等边三角形镶嵌成一个六边形 —— 围绕中心共 360°！");
 }
 
 /* -------------------------------- Banner ----------------------------------- */
@@ -755,7 +817,7 @@ document.querySelectorAll("button.tool[data-add]").forEach(function (btn) {
 document.getElementById("btnDuplicate").addEventListener("click", duplicateSelected);
 document.getElementById("btnUndo").addEventListener("click", undo);
 document.getElementById("btnGroup").addEventListener("click", groupOrUngroup);
-document.getElementById("btnHexDemo").addEventListener("click", hexagonDemo);
+document.getElementById("btnTessDemo").addEventListener("click", tessellationDemo);
 document.getElementById("btnDelete").addEventListener("click", deleteSelected);
 document.getElementById("btnClear").addEventListener("click", clearCanvas);
 

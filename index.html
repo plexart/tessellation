@@ -774,11 +774,13 @@ function planRosette(worldPts, baseCenter) {
 }
 
 // Animate the planned copies into place one after another: each clone spawns on
-// top of the base shape, then slides + rotates to its target over ~450ms.
+// top of the base shape, then slides + rotates to its target over ~900ms.
+// Copies are fully sequential: each one lands, then pauses before the next
+// begins (STAGGER = DUR + PAUSE), so students can follow it step by step.
 var demoRunning = false;
 function animateTiles(base, baseCenter, baseAngle, tiles) {
   if (!tiles.length) { demoRunning = false; return; }
-  var STAGGER = 170, DUR = 460;
+  var DUR = 900, PAUSE = 450, STAGGER = DUR + PAUSE;
   var done = 0;
   tiles.forEach(function (tile, i) {
     setTimeout(function () {

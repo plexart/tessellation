@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>镶嵌魔法屋</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #2b3a4a;
+  }
+  #app { display: flex; height: 100vh; width: 100vw; }
+
+  /* ---------- Sidebar ---------- */
+  #sidebar {
+    width: 260px; min-width: 260px; height: 100%;
+    background: linear-gradient(180deg, #ffffff 0%, #f3f7fb 100%);
+    border-right: 1px solid #d8e1ea;
+    display: flex; flex-direction: column;
+    overflow-y: auto; padding: 16px 14px 24px; gap: 6px;
+    box-shadow: 2px 0 12px rgba(40,70,110,0.06);
+  }
+  #sidebar h1 {
+    font-size: 20px; margin: 2px 0 4px; line-height: 1.2;
+    background: linear-gradient(90deg,#ff5d73,#ffa600,#33b3ff,#7c5cff);
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+    font-weight: 800; letter-spacing: .5px;
+  }
+  #sidebar .subtitle { font-size: 12px; color: #8497a8; margin-bottom: 8px; line-height: 1.4; }
+  .section { margin-top: 10px; }
+  .section-title {
+    font-size: 12px; font-weight: 700; letter-spacing: .4px;
+    color: #7587a0; margin: 8px 2px 6px; display: flex; align-items: center; gap: 6px;
+  }
+  .section-title .dot { width: 8px; height: 8px; border-radius: 50%; display:inline-block; }
+  button.tool {
+    width: 100%; text-align: left; border: 1px solid #d4deea; background: #fff;
+    color: #344a5e; padding: 9px 12px; border-radius: 10px; font-size: 13px; font-weight: 600;
+    cursor: pointer; margin-bottom: 6px; transition: all .12s ease; display:flex; align-items:center; gap:8px;
+    user-select: none;
+  }
+  button.tool:hover { border-color: #9fc2e8; background: #f0f7ff; transform: translateY(-1px); }
+  button.tool:active { transform: translateY(0); background: #e4f0ff; }
+  button.tool .swatch { width:14px; height:14px; border-radius:4px; flex:0 0 auto; }
+  button.tool .key { margin-left:auto; font-size:11px; color:#9aa9bb; font-weight:600; }
+  button.tool.danger { color:#c0392b; border-color:#f1c9c2; }
+  button.tool.danger:hover { background:#fff1ef; border-color:#e9a79d; }
+  button.tool.accent { color:#1d6fd6; border-color:#bcd8f7; }
+  button.tool.accent:hover { background:#eaf4ff; }
+
+  .toggle-row {
+    display:flex; align-items:center; justify-content:space-between;
+    background:#fff; border:1px solid #d4deea; border-radius:10px; padding:9px 12px; margin-bottom:6px;
+  }
+  .toggle-row .switch-label { font-size:13px; font-weight:600; }
+  .switch { position:relative; display:inline-block; width:42px; height:24px; flex:0 0 auto; cursor:pointer; }
+  .switch input { opacity:0; width:0; height:0; position:absolute; }
+  .slider {
+    position:absolute; inset:0; background:#cdd8e4; border-radius:24px; transition:.2s;
+  }
+  .slider:before {
+    content:""; position:absolute; height:18px; width:18px; left:3px; top:3px;
+    background:#fff; border-radius:50%; transition:.2s; box-shadow:0 1px 3px rgba(0,0,0,.25);
+  }
+  .switch input:checked + .slider { background:#3aa0ff; }
+  .switch input:checked + .slider:before { transform:translateX(18px); }
+
+  /* ---------- Canvas area ---------- */
+  #stage { flex:1; position:relative; display:flex; flex-direction:column; min-width:0; }
+  #banner {
+    height:44px; min-height:44px; display:flex; align-items:center; gap:10px; padding:0 16px;
+    background:linear-gradient(90deg,#2b6fb0,#3a8fd0); color:#fff; font-size:13px; font-weight:600;
+    box-shadow:0 2px 8px rgba(30,80,140,.25); z-index:5; overflow:hidden; white-space:nowrap;
+  }
+  #banner .pill { background:rgba(255,255,255,.18); padding:3px 9px; border-radius:20px; font-weight:600; }
+  #canvas-wrap {
+    flex:1; position:relative; overflow:hidden;
+    background-color:#eef2f5;
+    background-image:
+      linear-gradient(rgba(150,170,190,.30) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(150,170,190,.30) 1px, transparent 1px),
+      linear-gradient(rgba(150,170,190,.14) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(150,170,190,.14) 1px, transparent 1px);
+    background-size: 100px 100px, 100px 100px, 20px 20px, 20px 20px;
+  }
+  canvas { display:block; }
+  #counter {
+    position:absolute; right:12px; bottom:10px; z-index:6;
+    background:rgba(255,255,255,.85); border:1px solid #cdd8e4; border-radius:20px;
+    padding:4px 12px; font-size:12px; font-weight:700; color:#42566a; pointer-events:none;
+  }
+
+  @media (max-width: 760px) {
+    #sidebar { width: 214px; min-width:214px; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <h1>镶嵌魔法屋</h1>
+    <div class="subtitle">探索图形如何拼接 —— 让相同颜色的边对齐！</div>
+
+    <div class="section">
+      <div class="section-title"><span class="dot" style="background:#3aa0ff"></span>显示</div>
+      <div class="toggle-row">
+        <span class="switch-label">显示内角度数</span>
+        <label class="switch">
+          <input type="checkbox" id="toggleAngles" />
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title"><span class="dot" style="background:#34c759"></span>正多边形</div>
+      <button class="tool" data-add="triangle"><span class="swatch" style="background:#cdeccf"></span>正三角形</button>
+      <button class="tool" data-add="square"><span class="swatch" style="background:#cfe3f7"></span>正方形</button>
+      <button class="tool" data-add="hexagon"><span class="swatch" style="background:#f7e6c9"></span>正六边形</button>
+      <button class="tool" data-add="pentagon"><span class="swatch" style="background:#f3d2e0"></span>正五边形&nbsp;&#10060;</button>
+    </div>
+
+    <div class="section">
+      <div class="section-title"><span class="dot" style="background:#ff9500"></span>随机不规则图形</div>
+      <button class="tool" data-add="randTriangle"><span class="swatch" style="background:#e6dcf7"></span>随机三角形</button>
+      <button class="tool" data-add="randQuad"><span class="swatch" style="background:#dcf0f7"></span>随机四边形</button>
+    </div>
+
+    <div class="section">
+      <div class="section-title"><span class="dot" style="background:#7c5cff"></span>操作</div>
+      <button class="tool accent" id="btnCopy">&#128203; 复制<span class="key">Ctrl+C</span></button>
+      <button class="tool accent" id="btnPaste">&#128204; 粘贴<span class="key">Ctrl+V</span></button>
+      <button class="tool accent" id="btnUndo">&#8630; 撤销<span class="key">Ctrl+Z</span></button>
+      <button class="tool accent" id="btnGroup">&#128230; 组合 / 解组<span class="key">Ctrl+G</span></button>
+      <button class="tool accent" id="btnHexDemo">&#10024; 一键六边形演示</button>
+      <button class="tool danger" id="btnDelete">&#128465; 删除选中<span class="key">Del</span></button>
+      <button class="tool danger" id="btnClear">&#128260; 清空画布</button>
+    </div>
+  </aside>
+
+  <main id="stage">
+    <div id="banner">
+      <span class="pill">提示</span>
+      <span id="bannerText">添加图形后，拖动一个靠近另一个 —— 出现黄色虚线表示即将吸附，松开即锁定（绿色闪光）。让相同颜色的边对齐！</span>
+    </div>
+    <div id="canvas-wrap">
+      <canvas id="c"></canvas>
+      <div id="counter">图形：0</div>
+    </div>
+  </main>
+</div>
+
+<script>
+"use strict";
+/* =========================================================================
+   镶嵌魔法屋 / Tessellation Magic House
+   Single-file educational geometry tessellation tool built on Fabric.js.
+   ========================================================================= */
+
+// ---- Bright edge color palette (Edge1 Red, Edge2 Green, Edge3 Blue, ...) ----
+var EDGE_COLORS = ["#e63946", "#2a9d3f", "#1d6fd6", "#ff8c00", "#7c4dff", "#00b3a4", "#e91e8c"];
+// ---- Soft pastel fills (cycled per new shape) ----
+var FILL_COLORS = ["#cdeccf", "#cfe3f7", "#f7e6c9", "#f3d2e0", "#e6dcf7", "#dcf0f7", "#fde2cf"];
+var fillIdx = 0;
+function nextFill() { var c = FILL_COLORS[fillIdx % FILL_COLORS.length]; fillIdx++; return c; }
+
+var DEG = fabric.util.radiansToDegrees;
+var RAD = fabric.util.degreesToRadians;
+var SNAP_DIST = 30;          // px vertex proximity to trigger snap
+var SNAP_ANGLE = RAD(25);    // max rotation allowed to align edges
+var transformPoint = fabric.util.transformPoint;
+// custom properties that must survive serialization (undo / copy-paste)
+var EXTRA_PROPS = ["edgeColors", "showAngles", "edgeStrokeWidth"];
+
+function normAngle(a){ while(a > Math.PI) a -= 2*Math.PI; while(a < -Math.PI) a += 2*Math.PI; return a; }
+function dist(p, q){ var dx = p.x-q.x, dy = p.y-q.y; return Math.sqrt(dx*dx + dy*dy); }
+
+/* -------------------------------------------------------------------------
+   Custom Fabric object: ColoredPolygon
+   A single Fabric object that renders a pastel fill plus per-edge colored
+   ultra-thin lines, and (optionally) interior angle labels. Keeping it as a
+   single object gives us a clean transformation matrix for the snap engine.
+   ------------------------------------------------------------------------- */
+fabric.ColoredPolygon = fabric.util.createClass(fabric.Polygon, {
+  type: "coloredPolygon",
+  edgeColors: null,
+  showAngles: false,
+  edgeStrokeWidth: 1.5,
+
+  initialize: function (points, options) {
+    options = options || {};
+    this.callSuper("initialize", points, options);
+    this.edgeColors = options.edgeColors || EDGE_COLORS;
+    this.showAngles = !!options.showAngles;
+    if (options.edgeStrokeWidth) this.edgeStrokeWidth = options.edgeStrokeWidth;
+    this.set({
+      objectCaching: false,
+      fill: options.fill || "#cfe3f7",
+      stroke: null,
+      strokeWidth: 0,
+      perPixelTargetFind: false,
+      cornerColor: "#1d6fd6",
+      cornerStyle: "circle",
+      transparentCorners: false,
+      borderColor: "#1d6fd6",
+      cornerSize: 10,
+      padding: 4
+    });
+  },
+
+  toObject: function (propsToInclude) {
+    return fabric.util.object.extend(this.callSuper("toObject", propsToInclude), {
+      edgeColors: this.edgeColors.slice(),
+      showAngles: this.showAngles,
+      edgeStrokeWidth: this.edgeStrokeWidth
+    });
+  },
+
+  _render: function (ctx) {
+    var pts = this.points, n = pts.length;
+    var ox = this.pathOffset.x, oy = this.pathOffset.y;
+
+    // centroid (for inward angle-label placement)
+    var cx = 0, cy = 0;
+    for (var k = 0; k < n; k++) { cx += pts[k].x; cy += pts[k].y; }
+    cx /= n; cy /= n;
+
+    // 1) pastel fill
+    ctx.beginPath();
+    for (var i = 0; i < n; i++) {
+      var p = pts[i];
+      if (i === 0) ctx.moveTo(p.x - ox, p.y - oy);
+      else ctx.lineTo(p.x - ox, p.y - oy);
+    }
+    ctx.closePath();
+    ctx.fillStyle = this.fill;
+    ctx.fill();
+
+    // 2) ultra-thin colored edges
+    ctx.lineCap = "round";
+    for (var e = 0; e < n; e++) {
+      var a = pts[e], b = pts[(e + 1) % n];
+      ctx.beginPath();
+      ctx.moveTo(a.x - ox, a.y - oy);
+      ctx.lineTo(b.x - ox, b.y - oy);
+      ctx.strokeStyle = this.edgeColors[e % this.edgeColors.length];
+      ctx.lineWidth = this.edgeStrokeWidth;
+      ctx.stroke();
+    }
+
+    // 3) interior angle labels
+    if (this.showAngles) {
+      ctx.font = "bold 13px 'Segoe UI', Arial, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (var v = 0; v < n; v++) {
+        var cur = pts[v];
+        var prev = pts[(v - 1 + n) % n];
+        var nxt = pts[(v + 1) % n];
+        var a1 = Math.atan2(prev.y - cur.y, prev.x - cur.x);
+        var a2 = Math.atan2(nxt.y - cur.y, nxt.x - cur.x);
+        var ang = Math.abs(a1 - a2) * 180 / Math.PI;
+        if (ang > 180) ang = 360 - ang;
+        var deg = Math.round(ang);
+        // offset toward centroid
+        var dx = cx - cur.x, dy = cy - cur.y;
+        var len = Math.sqrt(dx*dx + dy*dy) || 1;
+        var off = Math.min(26, len * 0.4);
+        var tx = cur.x + (dx/len)*off - ox;
+        var ty = cur.y + (dy/len)*off - oy;
+        var label = deg + "\u00B0";
+        var w = ctx.measureText(label).width;
+        ctx.fillStyle = "rgba(255,255,255,0.82)";
+        ctx.beginPath();
+        var rw = w/2 + 5, rh = 9;
+        if (ctx.roundRect) { ctx.roundRect(tx-rw, ty-rh, rw*2, rh*2, 6); }
+        else { ctx.rect(tx-rw, ty-rh, rw*2, rh*2); }
+        ctx.fill();
+        ctx.fillStyle = "#23485f";
+        ctx.fillText(label, tx, ty);
+      }
+    }
+  }
+});
+fabric.ColoredPolygon.fromObject = function (object, callback) {
+  return fabric.Object._fromObject("ColoredPolygon", object, callback, "points");
+};
+
+/* ------------------------------- Canvas setup ------------------------------ */
+var wrap = document.getElementById("canvas-wrap");
+var canvas = new fabric.Canvas("c", {
+  backgroundColor: "transparent",
+  selection: true,
+  preserveObjectStacking: true,
+  uniformScaling: true,
+  selectionColor: "rgba(58,160,255,0.12)",
+  selectionBorderColor: "#1d6fd6",
+  selectionLineWidth: 1.5
+});
+
+function resizeCanvas() {
+  canvas.setWidth(wrap.clientWidth);
+  canvas.setHeight(wrap.clientHeight);
+  canvas.calcOffset();
+  canvas.requestRenderAll();
+}
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
+
+function updateCounter() {
+  var n = canvas.getObjects().filter(function(o){return !o.isGuide;}).length;
+  document.getElementById("counter").textContent = "图形：" + n;
+}
+
+/* ----------------------------- Shape factories ----------------------------- */
+function regularPolygonPoints(sides, radius, rotationDeg) {
+  var pts = [];
+  var start = RAD(rotationDeg || 0);
+  for (var i = 0; i < sides; i++) {
+    var a = start + (i * 2 * Math.PI / sides);
+    pts.push({ x: radius * Math.cos(a), y: radius * Math.sin(a) });
+  }
+  return pts;
+}
+
+function centerOfView() {
+  var z = canvas.getZoom();
+  return {
+    x: (canvas.getWidth()/2 - canvas.viewportTransform[4]) / z,
+    y: (canvas.getHeight()/2 - canvas.viewportTransform[5]) / z
+  };
+}
+
+function addPolygon(points, opts) {
+  opts = opts || {};
+  var c = centerOfView();
+  // small random scatter so stacked adds remain visible
+  var jx = (Math.random()-0.5) * 80;
+  var jy = (Math.random()-0.5) * 80;
+  var poly = new fabric.ColoredPolygon(points, {
+    left: c.x + jx,
+    top: c.y + jy,
+    originX: "center",
+    originY: "center",
+    fill: opts.fill || nextFill(),
+    showAngles: anglesOn,
+    angle: opts.angle || 0
+  });
+  canvas.add(poly);
+  canvas.setActiveObject(poly);
+  canvas.requestRenderAll();
+  updateCounter();
+  return poly;
+}
+
+function isConvex(pts) {
+  var n = pts.length, sign = 0;
+  for (var i = 0; i < n; i++) {
+    var a = pts[i], b = pts[(i+1)%n], c = pts[(i+2)%n];
+    var cross = (b.x-a.x)*(c.y-b.y) - (b.y-a.y)*(c.x-b.x);
+    if (cross !== 0) {
+      var s = cross > 0 ? 1 : -1;
+      if (sign === 0) sign = s;
+      else if (s !== sign) return false;
+    }
+  }
+  return true;
+}
+
+function randomConvex(nSides) {
+  // generate n points at sorted angles with varied radii -> simple polygon,
+  // retry until convex and reasonably non-degenerate.
+  for (var attempt = 0; attempt < 60; attempt++) {
+    var angles = [];
+    for (var i = 0; i < nSides; i++) {
+      var base = i * (2*Math.PI/nSides);
+      angles.push(base + (Math.random()-0.5) * (2*Math.PI/nSides) * 0.85);
+    }
+    angles.sort(function(a,b){return a-b;});
+    var pts = [];
+    for (var j = 0; j < nSides; j++) {
+      var r = 55 + Math.random()*55; // 55..110
+      pts.push({ x: r*Math.cos(angles[j]), y: r*Math.sin(angles[j]) });
+    }
+    if (!isConvex(pts)) continue;
+    var ok = true;
+    for (var e = 0; e < nSides; e++) {
+      if (dist(pts[e], pts[(e+1)%nSides]) < 35) { ok = false; break; }
+    }
+    if (ok) return pts;
+  }
+  return regularPolygonPoints(nSides, 80, Math.random()*90);
+}
+
+function addShape(kind) {
+  pushUndo();
+  switch (kind) {
+    case "triangle": return addPolygon(regularPolygonPoints(3, 78, -90));
+    case "square":   return addPolygon(regularPolygonPoints(4, 70, -45));
+    case "hexagon":  return addPolygon(regularPolygonPoints(6, 72, -90));
+    case "pentagon": return addPolygon(regularPolygonPoints(5, 72, -90));
+    case "randTriangle": return addPolygon(randomConvex(3));
+    case "randQuad":     return addPolygon(randomConvex(4));
+  }
+}
+
+/* ---------------------- World-coordinate geometry helpers ------------------ */
+// All leaf ColoredPolygons within an object (handles groups).
+function getLeafPolys(obj) {
+  if (!obj) return [];
+  if (obj.type === "coloredPolygon") return [obj];
+  if (obj._objects) {
+    var out = [];
+    obj._objects.forEach(function (o) { out = out.concat(getLeafPolys(o)); });
+    return out;
+  }
+  return [];
+}
+
+// World coordinate of a leaf polygon's vertex i (handles group nesting).
+function worldVertex(poly, i) {
+  var m = poly.calcTransformMatrix();
+  var lp = { x: poly.points[i].x - poly.pathOffset.x, y: poly.points[i].y - poly.pathOffset.y };
+  return transformPoint(lp, m);
+}
+
+// World edges of a leaf polygon: [{a,b,poly,ia,ib}]
+function worldEdges(poly) {
+  var n = poly.points.length, edges = [];
+  var verts = [];
+  for (var i = 0; i < n; i++) verts.push(worldVertex(poly, i));
+  for (var e = 0; e < n; e++) {
+    edges.push({ a: verts[e], b: verts[(e+1)%n], poly: poly, ia: e, ib: (e+1)%n });
+  }
+  return edges;
+}
+
+function collectWorldEdges(objs) {
+  var edges = [];
+  objs.forEach(function (o) {
+    getLeafPolys(o).forEach(function (p) {
+      edges = edges.concat(worldEdges(p));
+    });
+  });
+  return edges;
+}
+
+/* ------------------------------ Snap engine -------------------------------- */
+var guideObjs = [];
+var pendingSnap = null;
+
+function clearGuides() {
+  if (!guideObjs.length) return;
+  guideObjs.forEach(function (g) { canvas.remove(g); });
+  guideObjs = [];
+}
+
+// Find best snap candidate between the active object and everything else.
+function findSnap(active) {
+  var dragEdges = collectWorldEdges([active]);
+  var others = canvas.getObjects().filter(function (o) { return o !== active && !o.isGuide; });
+  var targetEdges = collectWorldEdges(others);
+  if (!dragEdges.length || !targetEdges.length) return null;
+
+  var best = null;
+  for (var i = 0; i < dragEdges.length; i++) {
+    var de = dragEdges[i];
+    var curDir = Math.atan2(de.b.y - de.a.y, de.b.x - de.a.x);
+    for (var j = 0; j < targetEdges.length; j++) {
+      var te = targetEdges[j];
+      // two correspondences: reversed (natural shared-edge) and direct
+      var corr = [
+        { t1: te.b, t2: te.a },   // reversed: de.a->te.b, de.b->te.a
+        { t1: te.a, t2: te.b }    // direct
+      ];
+      for (var k = 0; k < corr.length; k++) {
+        var t1 = corr[k].t1, t2 = corr[k].t2;
+        var desiredDir = Math.atan2(t2.y - t1.y, t2.x - t1.x);
+        var dtheta = normAngle(desiredDir - curDir);
+        if (Math.abs(dtheta) > SNAP_ANGLE) continue;
+        var d1 = dist(de.a, t1), d2 = dist(de.b, t2);
+        if (Math.min(d1, d2) > SNAP_DIST) continue;
+        var cost = d1 + d2;
+        if (!best || cost < best.cost) {
+          best = { de: de, te: te, t1: t1, t2: t2, dtheta: dtheta, cost: cost };
+        }
+      }
+    }
+  }
+  return best;
+}
+
+function drawGuide(edge, color, dashed, width) {
+  var line = new fabric.Line([edge.a.x, edge.a.y, edge.b.x, edge.b.y], {
+    stroke: color,
+    strokeWidth: width || 3,
+    strokeDashArray: dashed ? [7, 5] : null,
+    strokeLineCap: "round",
+    selectable: false,
+    evented: false,
+    hoverCursor: "default",
+    isGuide: true,
+    excludeFromExport: true,
+    objectCaching: false
+  });
+  canvas.add(line);
+  if (dashed) guideObjs.push(line); // only persistent pre-snap guides need cleanup
+  return line;
+}
+
+function flashSnap(edge) {
+  var line = drawGuide(edge, "#16c060", false, 5);
+  line.set({ shadow: new fabric.Shadow({ color: "rgba(22,192,96,0.9)", blur: 12 }) });
+  canvas.requestRenderAll();
+  line.animate("opacity", 0, {
+    duration: 400,
+    easing: fabric.util.ease.easeOutCubic,
+    onChange: canvas.requestRenderAll.bind(canvas),
+    onComplete: function () { canvas.remove(line); }
+  });
+}
+
+function applySnap(active, snap) {
+  // 1) rotate so the dragged edge becomes collinear with the target edge
+  active.rotate(active.angle + DEG(snap.dtheta));
+  active.setCoords();
+  if (active.forEachObject) active.forEachObject(function (o) { o.setCoords(); });
+
+  // 2) recompute the dragged source vertex world position, then translate
+  //    so it lands exactly on the matching target vertex.
+  var newA = worldVertex(snap.de.poly, snap.de.ia);
+  var dx = snap.t1.x - newA.x;
+  var dy = snap.t1.y - newA.y;
+  active.set({ left: active.left + dx, top: active.top + dy });
+  active.setCoords();
+  if (active.forEachObject) active.forEachObject(function (o) { o.setCoords(); });
+
+  canvas.requestRenderAll();
+  // green flash along the now-shared edge (target edge world coords)
+  flashSnap(snap.te);
+}
+
+canvas.on("object:moving", function (e) {
+  var active = e.target;
+  if (!active) return;
+  movedThisDrag = true;
+  clearGuides();
+  pendingSnap = null;
+  var snap = findSnap(active);
+  if (snap) {
+    pendingSnap = { active: active, snap: snap };
+    drawGuide(snap.te, "#ffd400", true, 3); // yellow dashed pre-snap guide
+  }
+});
+
+function commitPendingSnap() {
+  clearGuides();
+  if (pendingSnap && canvas.getActiveObject() === pendingSnap.active) {
+    applySnap(pendingSnap.active, pendingSnap.snap);
+  }
+  pendingSnap = null;
+  // finalise undo entry for this drag (move + snap = one step)
+  if (movedThisDrag && preDragState) { undoStack.push(preDragState); capUndo(); }
+  movedThisDrag = false;
+  preDragState = null;
+}
+
+canvas.on("mouse:up", commitPendingSnap);
+
+/* ----------------------------- Undo (history) ------------------------------ */
+var undoStack = [];
+var isRestoring = false;
+var preDragState = null;     // serialized state captured at mouse:down
+var movedThisDrag = false;
+var MAX_UNDO = 60;
+
+function serialize() { return canvas.toJSON(EXTRA_PROPS); }
+function capUndo() { while (undoStack.length > MAX_UNDO) undoStack.shift(); }
+
+// Capture the current state so the *next* action can be undone back to it.
+function pushUndo() {
+  if (isRestoring) return;
+  undoStack.push(serialize());
+  capUndo();
+}
+
+function undo() {
+  if (!undoStack.length) return;
+  var state = undoStack.pop();
+  isRestoring = true;
+  clearGuides();
+  canvas.discardActiveObject();
+  canvas.loadFromJSON(state, function () {
+    canvas.getObjects().forEach(function (o) {
+      getLeafPolys(o).forEach(function (p) { p.set("showAngles", anglesOn); p.dirty = true; });
+    });
+    canvas.requestRenderAll();
+    updateCounter();
+    isRestoring = false;
+  });
+}
+
+// Record pre-drag state at mouse:down so a drag becomes one undo step.
+canvas.on("mouse:down", function (e) {
+  if (isRestoring) return;
+  if (e.target) { preDragState = serialize(); movedThisDrag = false; }
+});
+
+/* ------------------------------- Angle toggle ------------------------------ */
+var anglesOn = false;
+function applyAnglesFlag() {
+  canvas.getObjects().forEach(function (o) {
+    getLeafPolys(o).forEach(function (p) { p.set("showAngles", anglesOn); p.dirty = true; });
+    o.dirty = true; // force groups (which cache) to re-render
+  });
+  canvas.requestRenderAll();
+}
+document.getElementById("toggleAngles").addEventListener("change", function (ev) {
+  anglesOn = ev.target.checked;
+  applyAnglesFlag();
+});
+
+/* ------------------------- Copy / Paste / Group ---------------------------- */
+var clipboard = null;
+var pasteCount = 0;
+
+function copySelected() {
+  var active = canvas.getActiveObject();
+  if (!active) { flashBanner("请先选择一个图形再复制。"); return; }
+  active.clone(function (cloned) {
+    clipboard = cloned;
+    pasteCount = 0;
+    flashBanner("已复制 —— 按 Ctrl+V（或点击“粘贴”）即可粘贴。");
+  }, EXTRA_PROPS);
+}
+
+function pasteClipboard() {
+  if (!clipboard) { flashBanner("剪贴板为空，请先复制一个图形。"); return; }
+  pushUndo();
+  clipboard.clone(function (cloned) {
+    pasteCount++;
+    var off = 25 * pasteCount;
+    canvas.discardActiveObject();
+    if (cloned.type === "activeSelection") {
+      cloned.canvas = canvas;
+      cloned.forEachObject(function (o) {
+        o.set({ left: o.left + off, top: o.top + off });
+        canvas.add(o);
+      });
+      cloned.setCoords();
+    } else {
+      cloned.set({ left: clipboard.left + off, top: clipboard.top + off });
+      canvas.add(cloned);
+    }
+    canvas.setActiveObject(cloned);
+    canvas.requestRenderAll();
+    updateCounter();
+  }, EXTRA_PROPS);
+}
+
+function ungroup(group) {
+  var sel = group.toActiveSelection();
+  canvas.requestRenderAll();
+  return sel;
+}
+
+function groupOrUngroup() {
+  var active = canvas.getActiveObject();
+  if (!active) { flashBanner("请先选择图形（框选 2 个以上可打包）。"); return; }
+  if (active.type === "activeSelection") {
+    pushUndo();
+    active.toGroup();
+    canvas.requestRenderAll();
+    updateCounter();
+    flashBanner("已将多个图形打包为一个整体 —— 现在它会作为一个整体移动和吸附。");
+  } else if (active.type === "group") {
+    pushUndo();
+    ungroup(active);
+    updateCounter();
+    flashBanner("已解组 —— 现在可以分别移动每个图形。");
+  } else {
+    flashBanner("请框选 2 个以上图形再打包。");
+  }
+}
+
+function deleteSelected() {
+  var active = canvas.getActiveObject();
+  if (!active) return;
+  pushUndo();
+  if (active.type === "activeSelection") {
+    active.forEachObject(function (o) { canvas.remove(o); });
+  } else {
+    canvas.remove(active);
+  }
+  canvas.discardActiveObject();
+  canvas.requestRenderAll();
+  updateCounter();
+}
+
+function clearCanvas() {
+  clearGuides();
+  if (canvas.getObjects().length) pushUndo();
+  canvas.getObjects().slice().forEach(function (o) { canvas.remove(o); });
+  canvas.discardActiveObject();
+  canvas.requestRenderAll();
+  updateCounter();
+}
+
+/* -------------------------- One-click hexagon demo ------------------------- */
+function hexagonDemo() {
+  pushUndo();
+  var c = centerOfView();
+  var R = 78;
+  for (var i = 0; i < 6; i++) {
+    var a0 = RAD(-90 + i*60);
+    var a1 = RAD(-90 + (i+1)*60);
+    var p0 = { x: 0, y: 0 };
+    var p1 = { x: R*Math.cos(a0), y: R*Math.sin(a0) };
+    var p2 = { x: R*Math.cos(a1), y: R*Math.sin(a1) };
+    var gx = (p0.x+p1.x+p2.x)/3, gy = (p0.y+p1.y+p2.y)/3;
+    var pts = [
+      { x: p0.x-gx, y: p0.y-gy },
+      { x: p1.x-gx, y: p1.y-gy },
+      { x: p2.x-gx, y: p2.y-gy }
+    ];
+    var poly = new fabric.ColoredPolygon(pts, {
+      left: c.x + gx,
+      top: c.y + gy,
+      originX: "center",
+      originY: "center",
+      fill: FILL_COLORS[i % FILL_COLORS.length],
+      showAngles: anglesOn
+    });
+    canvas.add(poly);
+  }
+  canvas.discardActiveObject();
+  canvas.requestRenderAll();
+  updateCounter();
+  flashBanner("6 个等边三角形镶嵌成一个六边形 —— 围绕中心共 360°！");
+}
+
+/* -------------------------------- Banner ----------------------------------- */
+var bannerDefault = "添加图形后，拖动一个靠近另一个 —— 出现黄色虚线表示即将吸附，松开即锁定（绿色闪光）。让相同颜色的边对齐！";
+var bannerTimer = null;
+function flashBanner(msg) {
+  var el = document.getElementById("bannerText");
+  el.textContent = msg;
+  if (bannerTimer) clearTimeout(bannerTimer);
+  bannerTimer = setTimeout(function () { el.textContent = bannerDefault; }, 4200);
+}
+
+/* ------------------------------ Wire up UI --------------------------------- */
+document.querySelectorAll("button.tool[data-add]").forEach(function (btn) {
+  btn.addEventListener("click", function () { addShape(btn.getAttribute("data-add")); });
+});
+document.getElementById("btnCopy").addEventListener("click", copySelected);
+document.getElementById("btnPaste").addEventListener("click", pasteClipboard);
+document.getElementById("btnUndo").addEventListener("click", undo);
+document.getElementById("btnGroup").addEventListener("click", groupOrUngroup);
+document.getElementById("btnHexDemo").addEventListener("click", hexagonDemo);
+document.getElementById("btnDelete").addEventListener("click", deleteSelected);
+document.getElementById("btnClear").addEventListener("click", clearCanvas);
+
+// keyboard shortcuts
+window.addEventListener("keydown", function (e) {
+  var tag = (e.target && e.target.tagName) || "";
+  if (tag === "INPUT" || tag === "TEXTAREA") return;
+  var ctrl = e.ctrlKey || e.metaKey;
+  var k = e.key.toLowerCase();
+  if (ctrl && k === "c") { e.preventDefault(); copySelected(); }
+  else if (ctrl && k === "v") { e.preventDefault(); pasteClipboard(); }
+  else if (ctrl && k === "z") { e.preventDefault(); undo(); }
+  else if (ctrl && k === "g") { e.preventDefault(); groupOrUngroup(); }
+  else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteSelected(); }
+});
+
+canvas.on("object:added", updateCounter);
+canvas.on("object:removed", updateCounter);
+
+// seed with a friendly starter shape (not recorded as an undo step)
+isRestoring = true;
+addPolygon(regularPolygonPoints(6, 72, -90), { fill: "#f7e6c9" });
+isRestoring = false;
+</script>
+</body>
+</html>

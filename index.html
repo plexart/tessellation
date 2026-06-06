@@ -131,8 +131,7 @@
 
     <div class="section">
       <div class="section-title"><span class="dot" style="background:#7c5cff"></span>操作</div>
-      <button class="tool accent" id="btnCopy">&#128203; 复制<span class="key">Ctrl+C</span></button>
-      <button class="tool accent" id="btnPaste">&#128204; 粘贴<span class="key">Ctrl+V</span></button>
+      <button class="tool accent" id="btnDuplicate">&#128203; 复制<span class="key">Ctrl+D</span></button>
       <button class="tool accent" id="btnUndo">&#8630; 撤销<span class="key">Ctrl+Z</span></button>
       <button class="tool accent" id="btnGroup">&#128230; 组合 / 解组<span class="key">Ctrl+G</span></button>
       <button class="tool accent" id="btnHexDemo">&#10024; 一键六边形演示</button>
@@ -172,7 +171,7 @@ var RAD = fabric.util.degreesToRadians;
 var SNAP_DIST = 30;          // px vertex proximity to trigger snap
 var SNAP_ANGLE = RAD(25);    // max rotation allowed to align edges
 var transformPoint = fabric.util.transformPoint;
-// custom properties that must survive serialization (undo / copy-paste)
+// custom properties that must survive serialization (undo / duplicate)
 var EXTRA_PROPS = ["edgeColors", "showAngles", "edgeStrokeWidth"];
 
 function normAngle(a){ while(a > Math.PI) a -= 2*Math.PI; while(a < -Math.PI) a += 2*Math.PI; return a; }
@@ -623,36 +622,23 @@ document.getElementById("toggleAngles").addEventListener("change", function (ev)
   applyAnglesFlag();
 });
 
-/* ------------------------- Copy / Paste / Group ---------------------------- */
-var clipboard = null;
-var pasteCount = 0;
-
-function copySelected() {
+/* ------------------------ Duplicate / Group -------------------------------- */
+// Ctrl+D: clone the selection in place (offset +25px) and select the copy.
+function duplicateSelected() {
   var active = canvas.getActiveObject();
   if (!active) { flashBanner("请先选择一个图形再复制。"); return; }
-  active.clone(function (cloned) {
-    clipboard = cloned;
-    pasteCount = 0;
-    flashBanner("已复制 —— 按 Ctrl+V（或点击“粘贴”）即可粘贴。");
-  }, EXTRA_PROPS);
-}
-
-function pasteClipboard() {
-  if (!clipboard) { flashBanner("剪贴板为空，请先复制一个图形。"); return; }
   pushUndo();
-  clipboard.clone(function (cloned) {
-    pasteCount++;
-    var off = 25 * pasteCount;
+  active.clone(function (cloned) {
     canvas.discardActiveObject();
     if (cloned.type === "activeSelection") {
       cloned.canvas = canvas;
       cloned.forEachObject(function (o) {
-        o.set({ left: o.left + off, top: o.top + off });
+        o.set({ left: o.left + 25, top: o.top + 25 });
         canvas.add(o);
       });
       cloned.setCoords();
     } else {
-      cloned.set({ left: clipboard.left + off, top: clipboard.top + off });
+      cloned.set({ left: active.left + 25, top: active.top + 25 });
       canvas.add(cloned);
     }
     canvas.setActiveObject(cloned);
@@ -756,8 +742,7 @@ function flashBanner(msg) {
 document.querySelectorAll("button.tool[data-add]").forEach(function (btn) {
   btn.addEventListener("click", function () { addShape(btn.getAttribute("data-add")); });
 });
-document.getElementById("btnCopy").addEventListener("click", copySelected);
-document.getElementById("btnPaste").addEventListener("click", pasteClipboard);
+document.getElementById("btnDuplicate").addEventListener("click", duplicateSelected);
 document.getElementById("btnUndo").addEventListener("click", undo);
 document.getElementById("btnGroup").addEventListener("click", groupOrUngroup);
 document.getElementById("btnHexDemo").addEventListener("click", hexagonDemo);
@@ -770,8 +755,7 @@ window.addEventListener("keydown", function (e) {
   if (tag === "INPUT" || tag === "TEXTAREA") return;
   var ctrl = e.ctrlKey || e.metaKey;
   var k = e.key.toLowerCase();
-  if (ctrl && k === "c") { e.preventDefault(); copySelected(); }
-  else if (ctrl && k === "v") { e.preventDefault(); pasteClipboard(); }
+  if (ctrl && k === "d") { e.preventDefault(); duplicateSelected(); }
   else if (ctrl && k === "z") { e.preventDefault(); undo(); }
   else if (ctrl && k === "g") { e.preventDefault(); groupOrUngroup(); }
   else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteSelected(); }

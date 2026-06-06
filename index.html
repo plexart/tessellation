@@ -713,23 +713,11 @@ function rotateAround(p, o, ang) {
   return { x: o.x + dx*c - dy*s, y: o.y + dx*s + dy*c };
 }
 
-// Build a ColoredPolygon from absolute world-space points (default top/left
-// origin so the literal coordinates place it correctly on the canvas).
-function addTileFromWorldPoints(worldPts, base, fillIndex) {
-  var poly = new fabric.ColoredPolygon(worldPts, {
-    fill: FILL_COLORS[fillIndex % FILL_COLORS.length],
-    edgeColors: base.edgeColors.slice(),
-    edgeStrokeWidth: base.edgeStrokeWidth,
-    showAngles: anglesOn
-  });
-  canvas.add(poly);
-  return poly;
-}
-
-// Tile triangles / quadrilaterals / hexagons by repeated 180° rotations about
-// shared-edge midpoints (a valid tiling for any triangle, any quadrilateral,
-// and centrally-symmetric polygons such as the regular hexagon).
-function halfTurnTiling(base, worldPts) {
+// Plan a tiling by repeated 180° rotations about shared-edge midpoints (valid
+// for any triangle, any quadrilateral, and centrally-symmetric polygons such as
+// the regular hexagon). Returns the target placements (excluding the base):
+// each is the world center the copy must reach plus its net rotation (degrees).
+function planHalfTurn(worldPts, baseCenter) {
   var MAX_TILES = 12;
   function centroidKey(pts) {
     var cx = 0, cy = 0;
@@ -739,28 +727,30 @@ function halfTurnTiling(base, worldPts) {
   }
   var placed = {};
   placed[centroidKey(worldPts)] = true;
-  var queue = [worldPts];
-  var tiles = [];
-  while (queue.length && tiles.length < MAX_TILES) {
+  var queue = [{ pts: worldPts, center: { x: baseCenter.x, y: baseCenter.y }, dphi: 0 }];
+  var all = [];
+  while (queue.length && all.length < MAX_TILES) {
     var t = queue.shift();
-    tiles.push(t);
-    for (var e = 0; e < t.length; e++) {
-      var a = t[e], b = t[(e+1) % t.length];
+    all.push(t);
+    for (var e = 0; e < t.pts.length; e++) {
+      var a = t.pts[e], b = t.pts[(e+1) % t.pts.length];
       var mx = (a.x + b.x)/2, my = (a.y + b.y)/2;
-      var nb = t.map(function (p) { return { x: 2*mx - p.x, y: 2*my - p.y }; });
+      var nb = t.pts.map(function (p) { return { x: 2*mx - p.x, y: 2*my - p.y }; });
       var k = centroidKey(nb);
-      if (!placed[k]) { placed[k] = true; queue.push(nb); }
+      if (!placed[k]) {
+        placed[k] = true;
+        queue.push({ pts: nb, center: { x: 2*mx - t.center.x, y: 2*my - t.center.y }, dphi: t.dphi + 180 });
+      }
     }
   }
-  // tiles[0] is the already-existing selected shape; render the rest.
-  for (var ti = 1; ti < tiles.length; ti++) addTileFromWorldPoints(tiles[ti], base, ti);
   flashBanner("用选中的图形密铺：复制并旋转，让相同的边彼此贴合，铺满平面！");
+  return all.slice(1).map(function (t, i) { return { center: t.center, dphi: t.dphi, fill: i + 1 }; });
 }
 
-// Fan copies of the selected shape around one vertex; for shapes whose interior
-// angle doesn't divide 360° (e.g. the regular pentagon) this leaves a visible
-// gap — showing why such shapes can't tessellate.
-function rosetteTiling(base, worldPts) {
+// Plan a fan of copies around one vertex. For shapes whose interior angle
+// doesn't divide 360° (e.g. the regular pentagon) this leaves a visible gap,
+// showing why such shapes can't tessellate.
+function planRosette(worldPts, baseCenter) {
   var n = worldPts.length;
   var prev = worldPts[n-1], cur = worldPts[0], nxt = worldPts[1];
   var a1 = Math.atan2(prev.y - cur.y, prev.x - cur.x);
@@ -768,9 +758,10 @@ function rosetteTiling(base, worldPts) {
   var theta = Math.abs(normAngle(a1 - a2));        // interior angle (radians)
   var sign = normAngle(a1 - a2) >= 0 ? 1 : -1;     // sweep direction
   var fit = Math.floor((2*Math.PI + 1e-6) / theta);
+  var out = [];
   for (var k = 1; k < fit; k++) {
-    var rot = worldPts.map(function (p) { return rotateAround(p, cur, sign * theta * k); });
-    addTileFromWorldPoints(rot, base, k);
+    var ang = sign * theta * k;
+    out.push({ center: rotateAround(baseCenter, cur, ang), dphi: ang * 180 / Math.PI, fill: k });
   }
   var deg = Math.round(theta * 180 / Math.PI);
   if (fit * theta < 2*Math.PI - 1e-3) {
@@ -779,25 +770,76 @@ function rosetteTiling(base, worldPts) {
   } else {
     flashBanner(fit + " 个图形绕一个顶点正好拼成 360°，可以密铺！");
   }
+  return out;
+}
+
+// Animate the planned copies into place one after another: each clone spawns on
+// top of the base shape, then slides + rotates to its target over ~450ms.
+var demoRunning = false;
+function animateTiles(base, baseCenter, baseAngle, tiles) {
+  if (!tiles.length) { demoRunning = false; return; }
+  var STAGGER = 170, DUR = 460;
+  var done = 0;
+  tiles.forEach(function (tile, i) {
+    setTimeout(function () {
+      base.clone(function (c) {
+        c.set({
+          fill: FILL_COLORS[tile.fill % FILL_COLORS.length],
+          showAngles: anglesOn,
+          selectable: true,
+          evented: true
+        });
+        c.setPositionByOrigin(new fabric.Point(baseCenter.x, baseCenter.y), "center", "center");
+        c.rotate(baseAngle);
+        c.setCoords();
+        canvas.add(c);
+        fabric.util.animate({
+          startValue: 0, endValue: 1, duration: DUR,
+          easing: fabric.util.ease.easeOutCubic,
+          onChange: function (v) {
+            var cx = baseCenter.x + (tile.center.x - baseCenter.x) * v;
+            var cy = baseCenter.y + (tile.center.y - baseCenter.y) * v;
+            c.setPositionByOrigin(new fabric.Point(cx, cy), "center", "center");
+            c.rotate(baseAngle + tile.dphi * v);
+            c.setCoords();
+            canvas.requestRenderAll();
+          },
+          onComplete: function () {
+            c.setPositionByOrigin(new fabric.Point(tile.center.x, tile.center.y), "center", "center");
+            c.rotate(baseAngle + tile.dphi);
+            c.setCoords();
+            canvas.requestRenderAll();
+            updateCounter();
+            if (++done === tiles.length) demoRunning = false;
+          }
+        });
+      }, EXTRA_PROPS);
+    }, i * STAGGER);
+  });
 }
 
 function tessellationDemo() {
+  if (demoRunning) return;
   var active = canvas.getActiveObject();
   if (!active || active.type !== "coloredPolygon") {
     flashBanner("请先选中单个图形，再点击「一键密铺演示」。");
     return;
   }
   pushUndo();
+  demoRunning = true;
   var worldPts = [];
   for (var i = 0; i < active.points.length; i++) worldPts.push(worldVertex(active, i));
+  var baseCenter = active.getCenterPoint();
+  var baseAngle = active.angle || 0;
   // A regular polygon tessellates iff its interior angle divides 360° evenly
   // (triangle, square, hexagon). Half-turn tiling covers those plus any
   // triangle/quad; otherwise fall back to the rosette gap demo.
-  if (worldPts.length === 5) rosetteTiling(active, worldPts);
-  else halfTurnTiling(active, worldPts);
+  var tiles = (worldPts.length === 5)
+    ? planRosette(worldPts, baseCenter)
+    : planHalfTurn(worldPts, baseCenter);
   canvas.discardActiveObject();
   canvas.requestRenderAll();
-  updateCounter();
+  animateTiles(active, baseCenter, baseAngle, tiles);
 }
 
 /* -------------------------------- Banner ----------------------------------- */

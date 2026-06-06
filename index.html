@@ -85,7 +85,10 @@
   .stepper button:hover { background:#f0f7ff; border-color:#9fc2e8; }
   .stepper input { width:44px; height:30px; text-align:center; border:1px solid #d4deea;
     border-radius:8px; font-size:14px; font-weight:700; color:#344a5e; }
-  .field-hint { font-size:12px; color:#7587a0; margin:0 2px 8px; }
+  .field-hint { font-size:12px; color:#7587a0; margin:0 2px 8px; font-weight:600; }
+  .field-sub { font-size:12px; color:#7587a0; font-weight:600; margin:2px 2px 6px; }
+  #angleInputs .field-row { margin-bottom:6px; }
+  #angleInputs label { width:auto; }
 
   /* ---------- Canvas area ---------- */
   #stage { flex:1; position:relative; display:flex; flex-direction:column; min-width:0; }
@@ -169,16 +172,10 @@
           <span class="slider"></span>
         </label>
       </div>
-      <div id="triAngles" style="display:none">
-        <div class="field-row">
-          <label>角 A</label>
-          <input type="number" id="angA" min="10" max="160" value="60" /><span class="deg">°</span>
-        </div>
-        <div class="field-row">
-          <label>角 B</label>
-          <input type="number" id="angB" min="10" max="160" value="60" /><span class="deg">°</span>
-        </div>
-        <div class="field-hint" id="angCHint">角 C = 60°</div>
+      <div id="angleBox" style="display:none">
+        <div class="field-sub">每个角的度数（内角）</div>
+        <div id="angleInputs"></div>
+        <div class="field-hint" id="angleSumHint"></div>
       </div>
       <button class="tool accent" id="btnCreateCustom">&#10010; 创建图形</button>
     </div>
@@ -486,34 +483,74 @@ function addShape(kind) {
 
 /* --------------------------- Custom shape builder -------------------------- */
 function customSidesValue() { return clamp(parseInt(document.getElementById("customSides").value, 10) || 4, 3, 12); }
+function angleSum(n) { return (n - 2) * 180; }
 
-// Show the per-angle inputs only when building a custom (non-regular) triangle,
-// where two angles fully determine the shape.
+// When "regular" is off, show one interior-angle input per side. Rebuilt
+// whenever the side count changes; defaults to the regular angle for that N.
 function refreshCustomFields() {
-  var sides = customSidesValue();
   var regular = document.getElementById("customRegular").checked;
-  document.getElementById("triAngles").style.display = (!regular && sides === 3) ? "" : "none";
+  document.getElementById("angleBox").style.display = regular ? "none" : "";
+  if (!regular) buildAngleInputs();
+}
+
+function buildAngleInputs() {
+  var n = customSidesValue();
+  var target = angleSum(n);
+  var base = Math.round(target / n);
+  var box = document.getElementById("angleInputs");
+  var html = "";
+  for (var k = 0; k < n; k++) {
+    html += '<div class="field-row"><label>角 ' + (k + 1) + '</label>' +
+            '<input type="number" class="angIn" min="1" max="179" value="' + base + '" />' +
+            '<span class="deg">°</span></div>';
+  }
+  box.innerHTML = html;
+  var inputs = box.querySelectorAll(".angIn");
+  // nudge the last default so the regular-angle rounding still sums exactly
+  var drift = target - base * n;
+  if (inputs.length) inputs[inputs.length - 1].value = base + drift;
+  for (var i = 0; i < inputs.length; i++) inputs[i].addEventListener("input", refreshAngleHint);
   refreshAngleHint();
 }
 
-function refreshAngleHint() {
-  var a = parseFloat(document.getElementById("angA").value) || 0;
-  var b = parseFloat(document.getElementById("angB").value) || 0;
-  var c = 180 - a - b;
-  document.getElementById("angCHint").textContent =
-    c > 0 ? "角 C = " + Math.round(c) + "°" : "角 A + 角 B 要小于 180°";
+function currentAngles() {
+  var inputs = document.querySelectorAll("#angleInputs .angIn");
+  var out = [];
+  for (var i = 0; i < inputs.length; i++) out.push(parseFloat(inputs[i].value) || 0);
+  return out;
 }
 
-// Triangle from two interior angles (A at origin, B at far end of the base,
-// C = 180−A−B) via the law of sines.
-function trianglePointsFromAngles(A, B, baseLen) {
-  var C = 180 - A - B;
-  var b = baseLen * Math.sin(RAD(B)) / Math.sin(RAD(C)); // length of side AC
-  return [
-    { x: 0, y: 0 },
-    { x: baseLen, y: 0 },
-    { x: b * Math.cos(RAD(A)), y: -b * Math.sin(RAD(A)) }
-  ];
+function refreshAngleHint() {
+  var n = customSidesValue();
+  var target = angleSum(n);
+  var sum = currentAngles().reduce(function (a, b) { return a + b; }, 0);
+  var ok = Math.abs(sum - target) <= 0.5;
+  var el = document.getElementById("angleSumHint");
+  el.textContent = "内角和：" + Math.round(sum) + "° / 应为 " + target + "°" + (ok ? "  ✓" : "");
+  el.style.color = ok ? "#2a9d3f" : "#c0392b";
+}
+
+// Build a polygon from its interior angles. The edge directions follow from the
+// exterior turns (180−angle); we fix the first N−2 side lengths and solve the
+// last two so the boundary closes (Σ sᵢ·dᵢ = 0). Returns null if the angles
+// can't form a simple polygon.
+function polygonFromAngles(anglesDeg, baseLen) {
+  var n = anglesDeg.length;
+  var phi = [0], k;
+  for (k = 1; k < n; k++) phi[k] = phi[k - 1] + (180 - anglesDeg[k]);
+  var d = phi.map(function (p) { var r = RAD(p); return { x: Math.cos(r), y: Math.sin(r) }; });
+  var s = new Array(n), Rx = 0, Ry = 0;
+  for (k = 0; k < n - 2; k++) { s[k] = baseLen; Rx -= baseLen * d[k].x; Ry -= baseLen * d[k].y; }
+  var d1 = d[n - 2], d2 = d[n - 1];
+  var det = d1.x * d2.y - d1.y * d2.x;
+  if (Math.abs(det) < 1e-9) return null;
+  var sA = (Rx * d2.y - Ry * d2.x) / det;
+  var sB = (d1.x * Ry - d1.y * Rx) / det;
+  if (sA <= 1e-6 || sB <= 1e-6) return null;
+  s[n - 2] = sA; s[n - 1] = sB;
+  var pts = [{ x: 0, y: 0 }];
+  for (k = 0; k < n - 1; k++) pts.push({ x: pts[k].x + s[k] * d[k].x, y: pts[k].y + s[k] * d[k].y });
+  return pts;
 }
 
 function createCustomShape() {
@@ -523,14 +560,18 @@ function createCustomShape() {
   var pts;
   if (regular) {
     pts = regularPolygonPoints(sides, size, -90);
-  } else if (sides === 3) {
-    var A = clamp(parseFloat(document.getElementById("angA").value) || 60, 10, 165);
-    var B = clamp(parseFloat(document.getElementById("angB").value) || 60, 10, 165);
-    if (A + B >= 170) { flashBanner("角度无效：角 A + 角 B 要小于 170°，角 C 才能大于 0。"); return; }
-    pts = trianglePointsFromAngles(A, B, size);
   } else {
-    var k = size / 80;
-    pts = randomConvex(sides).map(function (p) { return { x: p.x * k, y: p.y * k }; });
+    var angles = currentAngles();
+    var target = angleSum(sides);
+    var sum = angles.reduce(function (a, b) { return a + b; }, 0);
+    if (angles.some(function (a) { return a < 1 || a > 179; })) {
+      flashBanner("每个角都要在 1° 到 179° 之间。"); return;
+    }
+    if (Math.abs(sum - target) > 0.5) {
+      flashBanner("内角和要等于 " + target + "°（当前 " + Math.round(sum) + "°）。"); return;
+    }
+    pts = polygonFromAngles(angles, size);
+    if (!pts) { flashBanner("这些角度无法围成图形，请调整后再试。"); return; }
   }
   pushUndo();
   addPolygon(pts);
@@ -995,8 +1036,6 @@ document.getElementById("sidesDown").addEventListener("click", function () {
   refreshCustomFields();
 });
 document.getElementById("customRegular").addEventListener("change", refreshCustomFields);
-document.getElementById("angA").addEventListener("input", refreshAngleHint);
-document.getElementById("angB").addEventListener("input", refreshAngleHint);
 document.getElementById("btnCreateCustom").addEventListener("click", createCustomShape);
 refreshCustomFields();
 

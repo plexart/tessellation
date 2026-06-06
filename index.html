@@ -89,6 +89,7 @@
   .field-sub { font-size:12px; color:#7587a0; font-weight:600; margin:2px 2px 6px; }
   #angleInputs .field-row { margin-bottom:6px; }
   #angleInputs label { width:auto; }
+  #angleInputs input.auto { background:#eef2f6; color:#7587a0; cursor:not-allowed; }
 
   /* ---------- Canvas area ---------- */
   #stage { flex:1; position:relative; display:flex; flex-direction:column; min-width:0; }
@@ -497,22 +498,39 @@ function refreshCustomFields() {
 
 function buildAngleInputs() {
   var n = customSidesValue();
-  var target = angleSum(n);
-  var base = Math.round(target / n);
+  var base = Math.round(angleSum(n) / n);
   var box = document.getElementById("angleInputs");
   var html = "";
   for (var k = 0; k < n; k++) {
-    html += '<div class="field-row"><label>角 ' + (k + 1) + '</label>' +
-            '<input type="number" class="angIn" min="1" max="179" value="' + base + '" />' +
-            '<span class="deg">°</span></div>';
+    var last = k === n - 1;
+    html += '<div class="field-row"><label>角 ' + (k + 1) + (last ? "（自动）" : "") + '</label>' +
+            '<input type="number" class="angIn' + (last ? " auto" : "") + '" min="1" max="179" value="' + base + '"' +
+            (last ? ' readonly' : '') + ' /><span class="deg">°</span></div>';
   }
   box.innerHTML = html;
-  var inputs = box.querySelectorAll(".angIn");
-  // nudge the last default so the regular-angle rounding still sums exactly
-  var drift = target - base * n;
-  if (inputs.length) inputs[inputs.length - 1].value = base + drift;
-  for (var i = 0; i < inputs.length; i++) inputs[i].addEventListener("input", refreshAngleHint);
-  refreshAngleHint();
+  // only the first N−1 angles are editable; the last is derived so the sum closes
+  var editable = box.querySelectorAll(".angIn:not(.auto)");
+  for (var i = 0; i < editable.length; i++) editable[i].addEventListener("input", recomputeLastAngle);
+  recomputeLastAngle();
+}
+
+function recomputeLastAngle() {
+  var n = customSidesValue();
+  var target = angleSum(n);
+  var inputs = document.querySelectorAll("#angleInputs .angIn");
+  var sumOthers = 0;
+  for (var i = 0; i < inputs.length - 1; i++) sumOthers += parseFloat(inputs[i].value) || 0;
+  var lastEl = inputs[inputs.length - 1];
+  var lastVal = target - sumOthers;
+  if (lastEl) lastEl.value = Math.round(lastVal * 10) / 10;
+  var el = document.getElementById("angleSumHint");
+  if (lastVal > 0.5 && lastVal < 179.5) {
+    el.textContent = "角 " + n + " 自动为 " + (Math.round(lastVal * 10) / 10) + "°（内角和 " + target + "°）";
+    el.style.color = "#2a9d3f";
+  } else {
+    el.textContent = "前面的角太大了：角 " + n + " 需在 0°~180° 之间（当前 " + (Math.round(lastVal * 10) / 10) + "°）";
+    el.style.color = "#c0392b";
+  }
 }
 
 function currentAngles() {
@@ -520,16 +538,6 @@ function currentAngles() {
   var out = [];
   for (var i = 0; i < inputs.length; i++) out.push(parseFloat(inputs[i].value) || 0);
   return out;
-}
-
-function refreshAngleHint() {
-  var n = customSidesValue();
-  var target = angleSum(n);
-  var sum = currentAngles().reduce(function (a, b) { return a + b; }, 0);
-  var ok = Math.abs(sum - target) <= 0.5;
-  var el = document.getElementById("angleSumHint");
-  el.textContent = "内角和：" + Math.round(sum) + "° / 应为 " + target + "°" + (ok ? "  ✓" : "");
-  el.style.color = ok ? "#2a9d3f" : "#c0392b";
 }
 
 // Build a polygon from its interior angles. The edge directions follow from the

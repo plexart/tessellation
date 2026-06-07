@@ -819,14 +819,99 @@ function clearGuides() {
   guideObjs = [];
 }
 
+// Allowable penetration (px) before two shapes count as overlapping. A clean
+// edge-to-edge snap touches with ~0 penetration; the tolerance absorbs float
+// error and unequal-length-edge contact.
+var OVERLAP_TOL = 1;
+
+// Convex-polygon overlap depth via the Separating Axis Theorem. Returns the
+// minimum penetration across all edge-normal axes, or 0 if a separating axis
+// exists (i.e. the polygons are disjoint or merely touching).
+function convexPenetration(A, B) {
+  function axes(P) {
+    var ax = [];
+    for (var i = 0; i < P.length; i++) {
+      var a = P[i], b = P[(i + 1) % P.length];
+      var nx = -(b.y - a.y), ny = (b.x - a.x);
+      var l = Math.hypot(nx, ny) || 1;
+      ax.push({ x: nx / l, y: ny / l });
+    }
+    return ax;
+  }
+  function proj(P, ax) {
+    var mn = Infinity, mx = -Infinity;
+    for (var i = 0; i < P.length; i++) {
+      var d = P[i].x * ax.x + P[i].y * ax.y;
+      if (d < mn) mn = d;
+      if (d > mx) mx = d;
+    }
+    return [mn, mx];
+  }
+  var all = axes(A).concat(axes(B)), min = Infinity;
+  for (var i = 0; i < all.length; i++) {
+    var p1 = proj(A, all[i]), p2 = proj(B, all[i]);
+    var o = Math.min(p1[1], p2[1]) - Math.max(p1[0], p2[0]);
+    if (o <= 0) return 0;          // separating axis -> not overlapping
+    if (o < min) min = o;
+  }
+  return min;
+}
+
+function leafWorldVerts(obj) {
+  return getLeafPolys(obj).map(function (p) {
+    var n = p.points.length, vs = [];
+    for (var i = 0; i < n; i++) vs.push(worldVertex(p, i));
+    return vs;
+  });
+}
+
+// World-space leaf vertices the active object *would* have after a given snap
+// (rotate about its centre by dtheta, then translate so the nearer endpoint
+// pair coincides) -- mirrors applySnap without mutating anything.
+function snapResultVerts(active, snap) {
+  var c = active.getCenterPoint();
+  var sin = Math.sin(snap.dtheta), cos = Math.cos(snap.dtheta);
+  function rot(p) {
+    var x = p.x - c.x, y = p.y - c.y;
+    return { x: c.x + x * cos - y * sin, y: c.y + x * sin + y * cos };
+  }
+  var wa = rot(worldVertex(snap.de.poly, snap.de.ia));
+  var wb = rot(worldVertex(snap.de.poly, snap.de.ib));
+  var useA = dist(wa, snap.t1) <= dist(wb, snap.t2);
+  var src = useA ? wa : wb, dst = useA ? snap.t1 : snap.t2;
+  var dx = dst.x - src.x, dy = dst.y - src.y;
+  return getLeafPolys(active).map(function (p) {
+    var n = p.points.length, vs = [];
+    for (var i = 0; i < n; i++) { var w = rot(worldVertex(p, i)); vs.push({ x: w.x + dx, y: w.y + dy }); }
+    return vs;
+  });
+}
+
+// Would applying this snap make the active object overlap any other shape?
+function snapCausesOverlap(active, snap, others) {
+  var mine = snapResultVerts(active, snap);
+  for (var o = 0; o < others.length; o++) {
+    var theirs = leafWorldVerts(others[o]);
+    for (var i = 0; i < mine.length; i++) {
+      for (var j = 0; j < theirs.length; j++) {
+        if (convexPenetration(mine[i], theirs[j]) > OVERLAP_TOL) return true;
+      }
+    }
+  }
+  return false;
+}
+
 // Find best snap candidate between the active object and everything else.
+// Candidates are ranked by closeness (cost); any placement that would overlap
+// an existing shape is rejected, so snapping never forces shapes into each
+// other -- it picks the closest *non-overlapping* alignment, or none.
 function findSnap(active) {
   var dragEdges = collectWorldEdges([active]);
   var others = canvas.getObjects().filter(function (o) { return o !== active && !o.isGuide; });
   var targetEdges = collectWorldEdges(others);
   if (!dragEdges.length || !targetEdges.length) return null;
 
-  var best = null;
+  var cands = [];
   for (var i = 0; i < dragEdges.length; i++) {
     var de = dragEdges[i];
     var curDir = Math.atan2(de.b.y - de.a.y, de.b.x - de.a.x);
@@ -844,14 +929,16 @@ function findSnap(active) {
         if (Math.abs(dtheta) > SNAP_ANGLE) continue;
         var d1 = dist(de.a, t1), d2 = dist(de.b, t2);
         if (Math.min(d1, d2) > SNAP_DIST) continue;
-        var cost = d1 + d2;
-        if (!best || cost < best.cost) {
-          best = { de: de, te: te, t1: t1, t2: t2, dtheta: dtheta, cost: cost };
-        }
+        cands.push({ de: de, te: te, t1: t1, t2: t2, dtheta: dtheta, cost: d1 + d2 });
       }
     }
   }
-  return best;
+  cands.sort(function (a, b) { return a.cost - b.cost; });
+  // Pick the closest alignment that doesn't push the shape into another one.
+  for (var c = 0; c < cands.length; c++) {
+    if (!snapCausesOverlap(active, cands[c], others)) return cands[c];
+  }
+  return null;
 }
 
 function drawGuide(edge, color, dashed, width) {

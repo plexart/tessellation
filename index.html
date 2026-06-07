@@ -296,7 +296,7 @@ fabric.ColoredPolygon = fabric.util.createClass(fabric.Polygon, {
       fill: options.fill || "#cfe3f7",
       stroke: null,
       strokeWidth: 0,
-      perPixelTargetFind: false,
+      perPixelTargetFind: true,
       cornerColor: "#1d6fd6",
       cornerStyle: "circle",
       transparentCorners: false,
@@ -391,6 +391,10 @@ var canvas = new fabric.Canvas("c", {
   selection: true,
   preserveObjectStacking: true,
   uniformScaling: true,
+  // Hit-test the rendered shape (its fill), not the bounding rectangle, so a
+  // click in an empty bounding-box corner does not grab the shape.
+  perPixelTargetFind: true,
+  targetFindTolerance: 4,
   selectionColor: "rgba(58,160,255,0.12)",
   selectionBorderColor: "#1d6fd6",
   selectionLineWidth: 1.5

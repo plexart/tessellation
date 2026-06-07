@@ -156,6 +156,13 @@
       </div>
     </div>
 
+    <div class="section" id="secFile">
+      <div class="section-title"><span class="dot" style="background:#00b3a4"></span>文件</div>
+      <button class="tool accent" id="btnExport">&#128190; 导出图形</button>
+      <button class="tool accent" id="btnImport">&#128193; 导入图形</button>
+      <input type="file" id="importFile" accept="application/json,.json" style="display:none" />
+    </div>
+
     <div class="section" id="secRegular">
       <div class="section-title"><span class="dot" style="background:#34c759"></span>正多边形</div>
       <button class="tool" data-add="triangle"><span class="swatch" style="background:#cdeccf"></span>正三角形</button>
@@ -1046,6 +1053,66 @@ function clearCanvas() {
   updateCounter();
 }
 
+/* --------------------------- Export / Import (JSON) ------------------------ */
+// Reuse the same serialization the undo system relies on (EXTRA_PROPS keeps the
+// per-edge colors + angle flags), so an exported file round-trips losslessly.
+function exportJSON() {
+  var data = serialize();
+  data.objects = (data.objects || []).filter(function (o) { return !o.isGuide; });
+  if (!data.objects.length) { flashBanner("画布是空的，没有可导出的图形。"); return; }
+  var payload = {
+    app: "tessellation-magic-house",
+    version: 1,
+    savedAt: new Date().toISOString(),
+    canvas: data
+  };
+  var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  var stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  a.href = url;
+  a.download = "tessellation-" + stamp + ".json";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  flashBanner("已导出 " + data.objects.length + " 个图形到 JSON 文件。");
+}
+
+// Load shapes from a previously exported file, replacing the current canvas.
+// Accepts either our wrapped payload ({ canvas: {...} }) or a raw Fabric JSON.
+function importJSONFile(file) {
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function (ev) {
+    var parsed;
+    try { parsed = JSON.parse(ev.target.result); }
+    catch (err) { flashBanner("导入失败：文件不是有效的 JSON。"); return; }
+    var canvasJSON = (parsed && parsed.canvas) ? parsed.canvas : parsed;
+    if (!canvasJSON || !Array.isArray(canvasJSON.objects)) {
+      flashBanner("导入失败：文件中找不到图形数据。"); return;
+    }
+    pushUndo();
+    isRestoring = true;
+    clearGuides();
+    canvas.discardActiveObject();
+    canvas.loadFromJSON(canvasJSON, function () {
+      canvas.getObjects().forEach(function (o) {
+        getLeafPolys(o).forEach(function (p) { p.set("showAngles", anglesOn); p.dirty = true; });
+        o.dirty = true;
+      });
+      canvas.requestRenderAll();
+      updateCounter();
+      isRestoring = false;
+      var n = canvas.getObjects().filter(function (o) { return !o.isGuide; }).length;
+      flashBanner("已导入 " + n + " 个图形。");
+      fitToView();
+    });
+  };
+  reader.onerror = function () { flashBanner("导入失败：无法读取文件。"); };
+  reader.readAsText(file);
+}
+
 /* --------------- One-click tessellation demo (selected shape) -------------- */
 // Rotate point p by ang (radians) around pivot o.
 function rotateAround(p, o, ang) {
@@ -1205,6 +1272,17 @@ document.getElementById("btnGroup").addEventListener("click", groupOrUngroup);
 document.getElementById("btnTessDemo").addEventListener("click", tessellationDemo);
 document.getElementById("btnDelete").addEventListener("click", deleteSelected);
 document.getElementById("btnClear").addEventListener("click", clearCanvas);
+
+// export / import shapes (JSON)
+document.getElementById("btnExport").addEventListener("click", exportJSON);
+document.getElementById("btnImport").addEventListener("click", function () {
+  var input = document.getElementById("importFile");
+  input.value = ""; // reset so re-selecting the same file still fires change
+  input.click();
+});
+document.getElementById("importFile").addEventListener("change", function (e) {
+  importJSONFile(e.target.files && e.target.files[0]);
+});
 
 // custom shape builder
 document.getElementById("sidesUp").addEventListener("click", function () {

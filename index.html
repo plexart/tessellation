@@ -890,11 +890,17 @@ function applySnap(active, snap) {
   active.setCoords();
   if (active.forEachObject) active.forEachObject(function (o) { o.setCoords(); });
 
-  // 2) recompute the dragged source vertex world position, then translate
-  //    so it lands exactly on the matching target vertex.
-  var newA = worldVertex(snap.de.poly, snap.de.ia);
-  var dx = snap.t1.x - newA.x;
-  var dy = snap.t1.y - newA.y;
+  // 2) Pin the endpoint pair the user actually brought together. When the two
+  //    edges differ in length only one pair can coincide, so anchoring on the
+  //    nearer pair lets the user choose which end (left vs right) aligns,
+  //    instead of always snapping the first endpoint.
+  var wa = worldVertex(snap.de.poly, snap.de.ia);
+  var wb = worldVertex(snap.de.poly, snap.de.ib);
+  var useA = dist(wa, snap.t1) <= dist(wb, snap.t2);
+  var src = useA ? wa : wb;
+  var dst = useA ? snap.t1 : snap.t2;
+  var dx = dst.x - src.x;
+  var dy = dst.y - src.y;
   active.set({ left: active.left + dx, top: active.top + dy });
   active.setCoords();
   if (active.forEachObject) active.forEachObject(function (o) { o.setCoords(); });

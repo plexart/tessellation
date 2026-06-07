@@ -116,6 +116,24 @@
     padding:4px 12px; font-size:12px; font-weight:700; color:#42566a; pointer-events:none;
   }
 
+  /* ---------- Canvas view controls (pan / zoom / overview) ---------- */
+  #viewControls {
+    position:absolute; left:12px; bottom:10px; z-index:6;
+    display:flex; align-items:center; gap:4px;
+    background:rgba(255,255,255,.92); border:1px solid #cdd8e4; border-radius:22px;
+    padding:4px; box-shadow:0 2px 8px rgba(40,70,110,.12);
+  }
+  #viewControls button {
+    border:none; background:transparent; color:#42566a; cursor:pointer;
+    width:30px; height:30px; border-radius:50%; font-size:16px; font-weight:700;
+    display:flex; align-items:center; justify-content:center; line-height:1; padding:0;
+    transition:background .12s ease;
+  }
+  #viewControls button:hover { background:#eaf4ff; }
+  #viewControls button:active { background:#d8ecff; }
+  #viewControls #vcZoomLabel { width:auto; min-width:48px; border-radius:14px; font-size:12px; font-weight:700; }
+  #viewControls #vcPan.active { background:#3aa0ff; color:#fff; }
+
   @media (max-width: 760px) {
     #sidebar { width: 214px; min-width:214px; }
   }
@@ -200,6 +218,13 @@
     <div id="canvas-wrap">
       <canvas id="c"></canvas>
       <div id="counter">图形：0</div>
+      <div id="viewControls">
+        <button id="vcPan" type="button" title="移动画布（H，或按住空格 / 中键拖动）">&#9995;</button>
+        <button id="vcZoomOut" type="button" title="缩小（&minus;）">&minus;</button>
+        <button id="vcZoomLabel" type="button" title="重置为 100%">100%</button>
+        <button id="vcZoomIn" type="button" title="放大（+）">+</button>
+        <button id="vcFit" type="button" title="概览 · 适应窗口（0）">&#9974;</button>
+      </div>
     </div>
   </main>
 </div>
@@ -368,9 +393,154 @@ function resizeCanvas() {
   canvas.setWidth(wrap.clientWidth);
   canvas.setHeight(wrap.clientHeight);
   canvas.calcOffset();
+  syncGrid();
   canvas.requestRenderAll();
 }
 window.addEventListener("resize", resizeCanvas);
+
+/* ----------------- Canvas view: move (pan) / scale (zoom) / overview ------
+   The viewport (Fabric's viewportTransform) is what we move & scale, so the
+   shapes themselves keep their true geometry — essential for tessellation.
+   - Move:     hand-tool button, hold Space, or middle-mouse drag.
+   - Scale:    +/- buttons, mouse wheel (zoom toward the cursor), or +/- keys.
+   - Overview: fit every shape into the visible area (or reset when empty).
+   --------------------------------------------------------------------------- */
+var MIN_ZOOM = 0.2, MAX_ZOOM = 6;
+var handMode = false;     // persistent hand tool (toggled via button / H)
+var spaceDown = false;    // transient hand while Space is held
+var isPanning = false;
+var lastPanPoint = null;
+
+// Keep the CSS background grid aligned with the panned / zoomed viewport.
+function syncGrid() {
+  var vpt = canvas.viewportTransform;
+  if (!vpt) return;
+  var z = vpt[0], ox = vpt[4], oy = vpt[5];
+  var big = 100 * z, small = 20 * z;
+  wrap.style.backgroundSize =
+    big + "px " + big + "px, " + big + "px " + big + "px, " +
+    small + "px " + small + "px, " + small + "px " + small + "px";
+  wrap.style.backgroundPosition =
+    ox + "px " + oy + "px, " + ox + "px " + oy + "px, " +
+    ox + "px " + oy + "px, " + ox + "px " + oy + "px";
+}
+
+function updateZoomLabel() {
+  var el = document.getElementById("vcZoomLabel");
+  if (el) el.textContent = Math.round(canvas.getZoom() * 100) + "%";
+}
+
+function afterViewChange() {
+  syncGrid();
+  updateZoomLabel();
+  canvas.requestRenderAll();
+}
+
+function panActive() { return handMode || spaceDown; }
+
+// Reflect the current pan-tool state on the canvas (cursor, hit-testing, etc.).
+function refreshPanState() {
+  var on = panActive();
+  canvas.selection = !on;        // suppress rubber-band selection while panning
+  canvas.skipTargetFind = on;    // clicks pan instead of grabbing shapes
+  canvas.defaultCursor = on ? "grab" : "default";
+  canvas.hoverCursor = on ? "grab" : "move";
+  var btn = document.getElementById("vcPan");
+  if (btn) btn.classList.toggle("active", handMode);
+  if (on) canvas.discardActiveObject();
+  if (!isPanning) canvas.setCursor(on ? "grab" : "default");
+  canvas.requestRenderAll();
+}
+
+function setPanMode(on) {
+  handMode = on;
+  refreshPanState();
+  flashBanner(on ? "移动画布模式：拖动空白处即可平移视图（再次点击 ✋ 或按 H 退出）。"
+                 : "已退出移动画布模式。");
+}
+
+/* ------------------------------- Scale (zoom) ------------------------------ */
+function setZoomAtPoint(newZoom, point) {
+  newZoom = clamp(newZoom, MIN_ZOOM, MAX_ZOOM);
+  if (point) canvas.zoomToPoint(point, newZoom);
+  else canvas.setZoom(newZoom);
+  afterViewChange();
+}
+
+function zoomBy(factor) {
+  var center = new fabric.Point(canvas.getWidth() / 2, canvas.getHeight() / 2);
+  setZoomAtPoint(canvas.getZoom() * factor, center);
+}
+
+function resetView() {
+  canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+  afterViewChange();
+}
+
+// Wheel = zoom toward the pointer.
+canvas.on("mouse:wheel", function (opt) {
+  var e = opt.e;
+  e.preventDefault();
+  e.stopPropagation();
+  var zoom = canvas.getZoom() * Math.pow(0.999, e.deltaY);
+  setZoomAtPoint(zoom, new fabric.Point(e.offsetX, e.offsetY));
+});
+
+/* -------------------------- Overview (fit to view) ------------------------- */
+function fitToView() {
+  var objs = canvas.getObjects().filter(function (o) { return !o.isGuide; });
+  if (!objs.length) { resetView(); return; }
+
+  var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  objs.forEach(function (o) {
+    var r = o.getBoundingRect(true, true); // scene coords, ignoring viewport
+    minX = Math.min(minX, r.left);
+    minY = Math.min(minY, r.top);
+    maxX = Math.max(maxX, r.left + r.width);
+    maxY = Math.max(maxY, r.top + r.height);
+  });
+
+  var pad = 60;
+  var vw = canvas.getWidth(), vh = canvas.getHeight();
+  var bw = Math.max(maxX - minX, 1), bh = Math.max(maxY - minY, 1);
+  var zoom = clamp(Math.min((vw - 2 * pad) / bw, (vh - 2 * pad) / bh), MIN_ZOOM, MAX_ZOOM);
+  var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  canvas.setViewportTransform([zoom, 0, 0, zoom, vw / 2 - cx * zoom, vh / 2 - cy * zoom]);
+  afterViewChange();
+}
+
+/* ------------------------------- Move (pan) -------------------------------- */
+canvas.on("mouse:down", function (opt) {
+  var e = opt.e;
+  if (!e) return;
+  // Pan with the hand tool, Space held, or the middle mouse button.
+  if (panActive() || e.button === 1) {
+    isPanning = true;
+    canvas.selection = false;
+    canvas.discardActiveObject();
+    lastPanPoint = { x: e.clientX, y: e.clientY };
+    canvas.setCursor("grabbing");
+    canvas.requestRenderAll();
+  }
+});
+canvas.on("mouse:move", function (opt) {
+  if (!isPanning) return;
+  var e = opt.e;
+  var vpt = canvas.viewportTransform;
+  vpt[4] += e.clientX - lastPanPoint.x;
+  vpt[5] += e.clientY - lastPanPoint.y;
+  lastPanPoint = { x: e.clientX, y: e.clientY };
+  canvas.requestRenderAll();
+  syncGrid();
+});
+canvas.on("mouse:up", function () {
+  if (!isPanning) return;
+  isPanning = false;
+  canvas.setViewportTransform(canvas.viewportTransform); // settle coords
+  canvas.selection = !panActive();
+  canvas.setCursor(panActive() ? "grab" : "default");
+});
+
 resizeCanvas();
 
 function updateCounter() {
@@ -1049,16 +1219,39 @@ document.getElementById("customRegular").addEventListener("change", refreshCusto
 document.getElementById("btnCreateCustom").addEventListener("click", createCustomShape);
 refreshCustomFields();
 
+// canvas view controls (move / scale / overview)
+document.getElementById("vcPan").addEventListener("click", function () { setPanMode(!handMode); });
+document.getElementById("vcZoomIn").addEventListener("click", function () { zoomBy(1.2); });
+document.getElementById("vcZoomOut").addEventListener("click", function () { zoomBy(1 / 1.2); });
+document.getElementById("vcZoomLabel").addEventListener("click", resetView);
+document.getElementById("vcFit").addEventListener("click", fitToView);
+updateZoomLabel();
+
 // keyboard shortcuts
 window.addEventListener("keydown", function (e) {
   var tag = (e.target && e.target.tagName) || "";
   if (tag === "INPUT" || tag === "TEXTAREA") return;
   var ctrl = e.ctrlKey || e.metaKey;
   var k = e.key.toLowerCase();
-  if (ctrl && k === "d") { e.preventDefault(); duplicateSelected(); }
+  if (e.code === "Space" || e.key === " ") {
+    e.preventDefault();
+    if (!spaceDown) { spaceDown = true; refreshPanState(); }
+  }
+  else if (ctrl && k === "d") { e.preventDefault(); duplicateSelected(); }
   else if (ctrl && k === "z") { e.preventDefault(); undo(); }
   else if (ctrl && k === "g") { e.preventDefault(); groupOrUngroup(); }
   else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteSelected(); }
+  else if (k === "h") { e.preventDefault(); setPanMode(!handMode); }
+  else if (k === "0") { e.preventDefault(); fitToView(); }
+  else if (k === "+" || k === "=") { e.preventDefault(); zoomBy(1.2); }
+  else if (k === "-" || k === "_") { e.preventDefault(); zoomBy(1 / 1.2); }
+});
+
+window.addEventListener("keyup", function (e) {
+  if (e.code === "Space" || e.key === " ") {
+    spaceDown = false;
+    if (!isPanning) refreshPanState();
+  }
 });
 
 canvas.on("object:added", updateCounter);

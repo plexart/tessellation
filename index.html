@@ -819,14 +819,158 @@ function clearGuides() {
   guideObjs = [];
 }
 
-// Find best snap candidate between the active object and everything else.
+// Allowable penetration (px) before two shapes count as overlapping. A clean
+// edge-to-edge snap touches with ~0 penetration; the tolerance absorbs float
+// error and unequal-length-edge contact.
+var OVERLAP_TOL = 1;
+
+// Convex-polygon overlap depth via the Separating Axis Theorem. Returns the
+// minimum penetration across all edge-normal axes, or 0 if a separating axis
+// exists (i.e. the polygons are disjoint or merely touching).
+function convexPenetration(A, B) {
+  // Cheap axis-aligned bounding-box reject first -- avoids the full SAT
+  // projection sweep for the common disjoint case (findSnap runs this for
+  // every candidate on every mouse-move).
+  var bb = function (P) {
+    var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (var i = 0; i < P.length; i++) {
+      if (P[i].x < x0) x0 = P[i].x; if (P[i].x > x1) x1 = P[i].x;
+      if (P[i].y < y0) y0 = P[i].y; if (P[i].y > y1) y1 = P[i].y;
+    }
+    return [x0, y0, x1, y1];
+  };
+  var a = bb(A), b = bb(B);
+  if (a[2] <= b[0] || b[2] <= a[0] || a[3] <= b[1] || b[3] <= a[1]) return 0;
+  function axes(P) {
+    var ax = [];
+    for (var i = 0; i < P.length; i++) {
+      var a = P[i], b = P[(i + 1) % P.length];
+      var nx = -(b.y - a.y), ny = (b.x - a.x);
+      var l = Math.hypot(nx, ny) || 1;
+      ax.push({ x: nx / l, y: ny / l });
+    }
+    return ax;
+  }
+  function proj(P, ax) {
+    var mn = Infinity, mx = -Infinity;
+    for (var i = 0; i < P.length; i++) {
+      var d = P[i].x * ax.x + P[i].y * ax.y;
+      if (d < mn) mn = d;
+      if (d > mx) mx = d;
+    }
+    return [mn, mx];
+  }
+  var all = axes(A).concat(axes(B)), min = Infinity;
+  for (var i = 0; i < all.length; i++) {
+    var p1 = proj(A, all[i]), p2 = proj(B, all[i]);
+    var o = Math.min(p1[1], p2[1]) - Math.max(p1[0], p2[0]);
+    if (o <= 0) return 0;          // separating axis -> not overlapping
+    if (o < min) min = o;
+  }
+  return min;
+}
+
+function leafWorldVerts(obj) {
+  return getLeafPolys(obj).map(function (p) {
+    var n = p.points.length, vs = [];
+    for (var i = 0; i < n; i++) vs.push(worldVertex(p, i));
+    return vs;
+  });
+}
+
+// World-space leaf vertices the active object *would* have after a given snap
+// (rotate about its centre by dtheta, then translate so the nearer endpoint
+// pair coincides) -- mirrors applySnap without mutating anything. An optional
+// extra offset models the post-snap slide (see resolveSlide).
+function snapResultVerts(active, snap, extra) {
+  var ex = extra ? extra.x : 0, ey = extra ? extra.y : 0;
+  var c = active.getCenterPoint();
+  var sin = Math.sin(snap.dtheta), cos = Math.cos(snap.dtheta);
+  function rot(p) {
+    var x = p.x - c.x, y = p.y - c.y;
+    return { x: c.x + x * cos - y * sin, y: c.y + x * sin + y * cos };
+  }
+  var wa = rot(worldVertex(snap.de.poly, snap.de.ia));
+  var wb = rot(worldVertex(snap.de.poly, snap.de.ib));
+  var useA = dist(wa, snap.t1) <= dist(wb, snap.t2);
+  var src = useA ? wa : wb, dst = useA ? snap.t1 : snap.t2;
+  var dx = dst.x - src.x, dy = dst.y - src.y;
+  return getLeafPolys(active).map(function (p) {
+    var n = p.points.length, vs = [];
+    for (var i = 0; i < n; i++) { var w = rot(worldVertex(p, i)); vs.push({ x: w.x + dx + ex, y: w.y + dy + ey }); }
+    return vs;
+  });
+}
+
+// Greatest penetration depth between a set of leaf polys and a flat list of
+// other shapes' leaf polys (0 == disjoint or merely touching).
+function maxPenetration(mine, otherLeaves) {
+  var mx = 0;
+  for (var i = 0; i < mine.length; i++) {
+    for (var j = 0; j < otherLeaves.length; j++) {
+      var p = convexPenetration(mine[i], otherLeaves[j]);
+      if (p > mx) mx = p;
+    }
+  }
+  return mx;
+}
+
+function projInterval(verts, ux, uy) {
+  var mn = Infinity, mx = -Infinity;
+  for (var i = 0; i < verts.length; i++) {
+    var d = verts[i].x * ux + verts[i].y * uy;
+    if (d < mn) mn = d;
+    if (d > mx) mx = d;
+  }
+  return [mn, mx];
+}
+
+// Smallest slide *along the shared-edge direction* (ux,uy) that lifts the
+// active shape out of any overlap, so a snap abuts its neighbours end-to-end
+// instead of overlapping them. Sliding along the edge keeps the edges
+// collinear (the snap still "holds"). Returns the slide vector, or null when
+// no overlap needs resolving.
+function resolveSlide(mine, otherLeaves, ux, uy) {
+  // Active object's extent projected onto the edge direction.
+  var aMin = Infinity, aMax = -Infinity;
+  for (var i = 0; i < mine.length; i++) {
+    var iv = projInterval(mine[i], ux, uy);
+    if (iv[0] < aMin) aMin = iv[0];
+    if (iv[1] > aMax) aMax = iv[1];
+  }
+  var needRight = 0, needLeft = 0, overlapping = false;
+  for (var j = 0; j < otherLeaves.length; j++) {
+    // only the leaves we actually collide with constrain the slide
+    var hit = false;
+    for (var m = 0; m < mine.length; m++) {
+      if (convexPenetration(mine[m], otherLeaves[j]) > OVERLAP_TOL) { hit = true; break; }
+    }
+    if (!hit) continue;
+    overlapping = true;
+    var ov = projInterval(otherLeaves[j], ux, uy);
+    needRight = Math.max(needRight, ov[1] - aMin); // push active past O on the +u side
+    needLeft = Math.max(needLeft, aMax - ov[0]);   // push active past O on the -u side
+  }
+  if (!overlapping) return null;
+  var s = (needRight <= needLeft) ? needRight : -needLeft; // smaller move wins
+  return { x: s * ux, y: s * uy };
+}
+
+// Find the best snap between the active object and everything else. Candidates
+// are ranked by closeness (cost). A candidate that would overlap a neighbour
+// is not discarded outright -- we first try to slide it along the shared edge
+// so it abuts without overlapping (the natural tessellation fit). The closest
+// candidate that ends up overlap-free wins; if none can, there is no snap.
 function findSnap(active) {
   var dragEdges = collectWorldEdges([active]);
   var others = canvas.getObjects().filter(function (o) { return o !== active && !o.isGuide; });
   var targetEdges = collectWorldEdges(others);
   if (!dragEdges.length || !targetEdges.length) return null;
 
-  var best = null;
+  var otherLeaves = [];
+  others.forEach(function (o) { otherLeaves = otherLeaves.concat(leafWorldVerts(o)); });
+
+  var cands = [];
   for (var i = 0; i < dragEdges.length; i++) {
     var de = dragEdges[i];
     var curDir = Math.atan2(de.b.y - de.a.y, de.b.x - de.a.x);
@@ -844,14 +988,26 @@ function findSnap(active) {
         if (Math.abs(dtheta) > SNAP_ANGLE) continue;
         var d1 = dist(de.a, t1), d2 = dist(de.b, t2);
         if (Math.min(d1, d2) > SNAP_DIST) continue;
-        var cost = d1 + d2;
-        if (!best || cost < best.cost) {
-          best = { de: de, te: te, t1: t1, t2: t2, dtheta: dtheta, cost: cost };
-        }
+        cands.push({ de: de, te: te, t1: t1, t2: t2, dtheta: dtheta, cost: d1 + d2 });
       }
     }
   }
-  return best;
+  cands.sort(function (a, b) { return a.cost - b.cost; });
+
+  for (var c = 0; c < cands.length; c++) {
+    var cand = cands[c];
+    var mine = snapResultVerts(active, cand);
+    if (maxPenetration(mine, otherLeaves) <= OVERLAP_TOL) return cand; // clean fit
+    // Overlaps: try to slide it along the shared edge until it abuts.
+    var len = dist(cand.te.a, cand.te.b) || 1;
+    var ux = (cand.te.b.x - cand.te.a.x) / len, uy = (cand.te.b.y - cand.te.a.y) / len;
+    var slide = resolveSlide(mine, otherLeaves, ux, uy);
+    if (slide && maxPenetration(snapResultVerts(active, cand, slide), otherLeaves) <= OVERLAP_TOL) {
+      cand.slide = slide;
+      return cand;
+    }
+  }
+  return null;
 }
 
 function drawGuide(edge, color, dashed, width) {
@@ -904,6 +1060,14 @@ function applySnap(active, snap) {
   active.set({ left: active.left + dx, top: active.top + dy });
   active.setCoords();
   if (active.forEachObject) active.forEachObject(function (o) { o.setCoords(); });
+
+  // 3) If pinning would overlap a neighbour, slide along the shared edge so
+  //    the shapes abut end-to-end instead of overlapping.
+  if (snap.slide) {
+    active.set({ left: active.left + snap.slide.x, top: active.top + snap.slide.y });
+    active.setCoords();
+    if (active.forEachObject) active.forEachObject(function (o) { o.setCoords(); });
+  }
 
   canvas.requestRenderAll();
   // green flash along the now-shared edge (target edge world coords)
